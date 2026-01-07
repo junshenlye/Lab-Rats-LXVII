@@ -1422,11 +1422,11 @@ function VCPendingStep({
               <Clock className="w-6 h-6 text-accent-amber" />
             )}
           </div>
-          <div>
-            <h2 className="font-display text-xl font-semibold text-text-primary">
+          <div className="flex-1 min-w-0">
+            <h2 className="font-display text-xl font-semibold text-text-primary truncate">
               {vcStatus === 'ready-to-accept' ? 'Credential Ready!' : 'Verification Pending'}
             </h2>
-            <p className="text-sm text-text-muted">
+            <p className="text-sm text-text-muted truncate">
               {vcStatus === 'ready-to-accept'
                 ? 'Your credential is ready to accept'
                 : 'Platform is verifying your documents...'}
