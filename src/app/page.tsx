@@ -67,8 +67,11 @@ export default function LandingPage() {
 
       if (address) {
         setWalletAddress(address);
-        // Route to onboarding for all new connections
-        router.push('/onboarding');
+        // Store wallet address in localStorage for dashboard
+        localStorage.setItem('walletAddress', address);
+
+        // Route directly to dashboard
+        router.push('/dashboard');
       }
     } catch (error) {
       console.error('Wallet connection failed:', error);
