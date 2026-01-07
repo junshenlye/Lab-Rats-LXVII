@@ -139,59 +139,108 @@ export function formatDID(walletAddress: string): string {
 }
 
 /**
- * Create a new DID for the wallet
- * This should trigger a DIDSet transaction on XRPL testnet
- *
- * In production, this would:
- * 1. Call your backend API to generate the DID
- * 2. Your backend would sign and submit a DIDSet transaction to XRPL testnet
- * 3. Wait for transaction confirmation
- * 4. Return the created DID
+ * Create a new DID for the wallet with company information
+ * Flow:
+ * 1. Backend builds a DIDSet transaction with company metadata
+ * 2. Frontend signs it with Crossmark wallet
+ * 3. Frontend submits signed transaction to XRPL testnet
+ * 4. Returns the transaction hash and created DID
  *
  * @param walletAddress - The XRPL wallet address
  * @param companyName - The company name
- * @returns Promise resolving to created DID string
+ * @param companyDetails - Complete company information
+ * @returns Promise resolving to DID creation result with transaction hash
  */
 export async function createDID(
   walletAddress: string,
-  companyName: string
-): Promise<{ success: boolean; did?: string; error?: string }> {
+  companyName: string,
+  companyDetails?: {
+    registrationNumber: string;
+    countryOfIncorporation: string;
+    contactEmail: string;
+    contactPhone?: string;
+    registeredAddress?: string;
+  }
+): Promise<{ success: boolean; did?: string; transactionHash?: string; error?: string }> {
   try {
     console.log('Creating DID for wallet:', walletAddress, 'Company:', companyName);
 
-    // Format the DID string
-    const did = formatDID(walletAddress);
+    // Step 1: Call backend to build the unsigned transaction
+    const buildResponse = await fetch('/api/did/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        walletAddress,
+        companyName,
+        registrationNumber: companyDetails?.registrationNumber || '',
+        countryOfIncorporation: companyDetails?.countryOfIncorporation || '',
+        contactEmail: companyDetails?.contactEmail || '',
+        contactPhone: companyDetails?.contactPhone || '',
+        registeredAddress: companyDetails?.registeredAddress || '',
+      }),
+    });
 
-    // TODO: Call your backend API to create the DID
-    // The backend should:
-    // 1. Validate the wallet address
-    // 2. Create a DIDSet transaction
-    // 3. Sign it with your server's key
-    // 4. Submit to XRPL testnet
-    // 5. Wait for confirmation
-    // 6. Return the confirmed DID
-    //
-    // Example backend call:
-    // const response = await fetch('/api/did/create', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     walletAddress,
-    //     companyName,
-    //     did
-    //   })
-    // });
-    // const result = await response.json();
-    // if (!result.success) throw new Error(result.error);
-    // return { success: true, did: result.did };
+    if (!buildResponse.ok) {
+      const error = await buildResponse.json();
+      throw new Error(error.error || 'Failed to build DID transaction');
+    }
 
-    // For now, simulate the operation
-    console.log('DID to be created:', did);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const buildResult = await buildResponse.json();
+
+    console.log('[DID Create] API response received:', buildResult);
+
+    if (!buildResult.success || !buildResult.transaction) {
+      console.error('[DID Create] API returned error:', buildResult.error);
+      throw new Error(buildResult.error || 'DID transaction build failed');
+    }
+
+    console.log('[DID Create] ✓ DIDSet transaction built successfully from API');
+    console.log('[DID Create] Transaction fields (base):', {
+      TransactionType: buildResult.transaction.TransactionType,
+      Account: buildResult.transaction.Account,
+      Fee: buildResult.transaction.Fee,
+      URI: buildResult.transaction.URI ? buildResult.transaction.URI.substring(0, 50) + '...' : 'none',
+    });
+
+    // Step 2: Autofill transaction with Sequence and LastLedgerSequence
+    console.log('[DID Create] Autofilling transaction with Sequence and LastLedgerSequence...');
+    const { autofillTransaction } = await import('./xrpl-autofill');
+
+    const autofillResult = await autofillTransaction(buildResult.transaction);
+
+    console.log('[DID Create] ✓ Transaction autofilled successfully');
+    console.log('[DID Create] Autofilled transaction fields:', {
+      TransactionType: autofillResult.TransactionType,
+      Account: autofillResult.Account,
+      Sequence: autofillResult.Sequence,
+      LastLedgerSequence: autofillResult.LastLedgerSequence,
+      Fee: autofillResult.Fee,
+    });
+
+    // Step 3: Sign and submit with Crossmark wallet
+    console.log('[DID Create] Calling signAndSubmitDIDWithCrossmark...');
+    const { signAndSubmitDIDWithCrossmark } = await import('./did-submit');
+
+    const submitResult = await signAndSubmitDIDWithCrossmark(
+      autofillResult,
+      buildResult.did
+    );
+
+    console.log('[DID Create] Submit result received:', { success: submitResult.success, error: submitResult.error });
+
+    if (!submitResult.success) {
+      console.error('[DID Create] Submit failed with error:', submitResult.error);
+      throw new Error(submitResult.error || 'Failed to submit DID transaction');
+    }
+
+    console.log('[DID Create] ✓✓✓ DID created and submitted successfully!');
+    console.log('[DID Create] DID:', submitResult.did);
+    console.log('[DID Create] Transaction Hash:', submitResult.transactionHash);
 
     return {
       success: true,
-      did,
+      did: submitResult.did,
+      transactionHash: submitResult.transactionHash,
     };
   } catch (error) {
     console.error('Failed to create DID:', error);

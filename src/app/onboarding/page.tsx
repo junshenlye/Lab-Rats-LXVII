@@ -34,7 +34,19 @@ import {
 type Step = 'wallet-connect' | 'did-company-info' | 'documents' | 'verification' | 'vc-issuance';
 type VerificationStatus = 'pending' | 'uploading-ipfs' | 'awaiting-review' | 'verified' | 'failed';
 type DocumentStatus = 'not-uploaded' | 'uploaded' | 'verifying' | 'verified' | 'rejected';
-type DIDStatus = 'pending' | 'checking' | 'found' | 'not-found' | 'creating' | 'created' | 'failed' | 'testnet_error';
+type DIDStatus =
+  | 'pending'
+  | 'checking'
+  | 'found'
+  | 'not-found'
+  | 'creating'           // Building transaction
+  | 'signing'            // Waiting for Crossmark signature
+  | 'signing_failed'     // User cancelled or Crossmark error
+  | 'submitting'         // Sending to XRPL
+  | 'submission_failed'  // XRPL rejected transaction
+  | 'created'            // Success
+  | 'failed'             // General failure
+  | 'testnet_error';     // Network issue
 type VCStatus = 'pending' | 'issuing' | 'issued' | 'failed';
 
 interface CompanyInfo {
@@ -82,6 +94,7 @@ export default function OnboardingPage() {
   const [isConnectingWallet, setIsConnectingWallet] = useState(false);
   const [didStatus, setDidStatus] = useState<DIDStatus>('pending');
   const [didErrorMessage, setDidErrorMessage] = useState<string | null>(null);
+  const [didTransactionHash, setDidTransactionHash] = useState<string | null>(null);
   const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>('pending');
   const [vcStatus, setVcStatus] = useState<VCStatus>('pending');
   const [ipfsCid, setIpfsCid] = useState<string | null>(null);
@@ -127,7 +140,7 @@ export default function OnboardingPage() {
           (didStatus === 'found' || didStatus === 'not-found')
         );
       case 'did-company-info':
-        // Can proceed if DID creation was successful
+        // Can proceed only if DID creation was successful (not in progress, not failed)
         return didStatus === 'created';
       case 'documents':
         return documents.certificateOfIncorporation.file && documents.registryExtract.file;
@@ -214,25 +227,69 @@ export default function OnboardingPage() {
   };
 
   const handleCreateDID = async () => {
+    console.log('[Onboarding] Starting DID creation process');
     setDidStatus('creating');
     setDidErrorMessage(null);
+    setDidTransactionHash(null);
 
     try {
       if (!connectedWalletAddress) {
+        console.error('[Onboarding] No wallet address available');
         setDidStatus('failed');
         setDidErrorMessage('Wallet address not available');
         return;
       }
 
-      const result = await createDID(connectedWalletAddress, companyInfo.companyName);
+      console.log('[Onboarding] Creating DID for wallet:', connectedWalletAddress);
+      console.log('[Onboarding] Company info:', {
+        companyName: companyInfo.companyName,
+        registrationNumber: companyInfo.registrationNumber,
+        country: companyInfo.countryOfIncorporation,
+      });
+
+      // Update status to 'signing' to indicate Crossmark popup should appear
+      console.log('[Onboarding] Setting status to "signing" - Crossmark popup should appear now');
+      setDidStatus('signing');
+
+      // Create DID with full company details
+      const result = await createDID(connectedWalletAddress, companyInfo.companyName, {
+        registrationNumber: companyInfo.registrationNumber,
+        countryOfIncorporation: companyInfo.countryOfIncorporation,
+        contactEmail: companyInfo.contactEmail,
+        contactPhone: companyInfo.contactPhone,
+        registeredAddress: companyInfo.registeredAddress,
+      });
+
+      console.log('[Onboarding] Create DID result:', { success: result.success, hasHash: !!result.transactionHash });
 
       if (result.success) {
+        console.log('[Onboarding] ✓✓✓ DID created successfully!');
+        console.log('[Onboarding] Transaction hash:', result.transactionHash);
+
         setDidStatus('created');
+        if (result.transactionHash) {
+          console.log('[Onboarding] Setting transaction hash:', result.transactionHash);
+          setDidTransactionHash(result.transactionHash);
+        }
       } else {
-        setDidStatus('failed');
+        console.error('[Onboarding] DID creation failed');
+
+        // Determine specific failure reason based on error message
+        if (result.error?.includes('cancelled') || result.error?.includes('Crossmark')) {
+          console.log('[Onboarding] User cancelled or Crossmark error');
+          setDidStatus('signing_failed');
+        } else if (result.error?.includes('Network') || result.error?.includes('connection')) {
+          console.log('[Onboarding] Network error during submission');
+          setDidStatus('submission_failed');
+        } else {
+          console.log('[Onboarding] General DID creation failure');
+          setDidStatus('failed');
+        }
+
         setDidErrorMessage(result.error || 'Failed to create DID');
       }
     } catch (error) {
+      console.error('[Onboarding] Exception during DID creation:', error);
       setDidStatus('failed');
       setDidErrorMessage(error instanceof Error ? error.message : 'Unknown error');
     }
@@ -266,6 +323,7 @@ export default function OnboardingPage() {
             walletAddress={connectedWalletAddress!}
             didStatus={didStatus}
             didErrorMessage={didErrorMessage}
+            didTransactionHash={didTransactionHash}
             onCreateDID={handleCreateDID}
           />
         );
@@ -706,6 +764,7 @@ function DIDCompanyInfoStep({
   walletAddress,
   didStatus,
   didErrorMessage,
+  didTransactionHash,
   onCreateDID,
 }: {
   companyInfo: CompanyInfo;
@@ -713,6 +772,7 @@ function DIDCompanyInfoStep({
   walletAddress: string;
   didStatus: DIDStatus;
   didErrorMessage: string | null;
+  didTransactionHash: string | null;
   onCreateDID: () => void;
 }) {
   const canCreate = companyInfo.companyName && companyInfo.registrationNumber &&
@@ -756,8 +816,29 @@ function DIDCompanyInfoStep({
               <Fingerprint className="w-4 h-4 text-rlusd-primary" />
               <span className="text-xs text-rlusd-primary/80 font-medium">Your DID</span>
             </div>
-            <code className="font-mono text-sm text-rlusd-glow break-all">did:xrpl:1:{walletAddress.substring(0, 20)}...</code>
+            <code className="font-mono text-sm text-rlusd-glow break-all">did:xrpl:testnet:{walletAddress}</code>
           </div>
+
+          {didTransactionHash && (
+            <div className="p-5 rounded-xl bg-gradient-to-r from-rlusd-glow/10 to-transparent border border-rlusd-glow/20">
+              <div className="flex items-center gap-2 mb-3">
+                <Zap className="w-4 h-4 text-rlusd-glow" />
+                <span className="text-xs text-rlusd-glow/80 font-medium">Transaction Hash</span>
+              </div>
+              <div className="space-y-3">
+                <code className="font-mono text-sm text-rlusd-glow break-all block">{didTransactionHash}</code>
+                <a
+                  href={`https://testnet.xrpl.org/transactions/${didTransactionHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rlusd-glow/10 hover:bg-rlusd-glow/20 text-sm text-rlusd-glow transition-colors"
+                >
+                  View on XRPL Explorer
+                  <ExternalLink className="w-4 h-4" />
+                </a>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
@@ -864,6 +945,66 @@ function DIDCompanyInfoStep({
             />
           </div>
         </div>
+
+        {/* Signing Status */}
+        {didStatus === 'signing' && (
+          <div className="p-4 rounded-xl bg-accent-violet/5 border border-accent-violet/20">
+            <div className="flex items-center gap-3">
+              <Loader2 className="w-5 h-5 text-accent-violet animate-spin" />
+              <div>
+                <p className="text-sm text-text-primary font-medium">Waiting for Crossmark Signature</p>
+                <p className="text-xs text-text-muted mt-1">
+                  A popup window should appear. Please approve the transaction in Crossmark to continue.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Submitting Status */}
+        {didStatus === 'submitting' && (
+          <div className="p-4 rounded-xl bg-accent-sky/5 border border-accent-sky/20">
+            <div className="flex items-center gap-3">
+              <Loader2 className="w-5 h-5 text-accent-sky animate-spin" />
+              <div>
+                <p className="text-sm text-text-primary font-medium">Submitting to XRPL Blockchain</p>
+                <p className="text-xs text-text-muted mt-1">
+                  Your DID transaction is being submitted to the XRPL testnet. This may take a few moments...
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Signing Failed */}
+        {didStatus === 'signing_failed' && (
+          <div className="p-4 rounded-xl bg-accent-coral/5 border border-accent-coral/20">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-accent-coral shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm text-text-primary font-medium">Transaction Cancelled</p>
+                <p className="text-xs text-text-muted mt-1">
+                  {didErrorMessage || 'You cancelled the transaction or Crossmark encountered an error. Please try again.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Submission Failed */}
+        {didStatus === 'submission_failed' && (
+          <div className="p-4 rounded-xl bg-accent-coral/5 border border-accent-coral/20">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-accent-coral shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm text-text-primary font-medium">Submission Failed</p>
+                <p className="text-xs text-text-muted mt-1">
+                  {didErrorMessage || 'The transaction could not be submitted to XRPL. Please check your connection and try again.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Error Display */}
         {didStatus === 'failed' && (
