@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { mockShipOwner, mockCharterer } from '@/lib/mockData';
 import {
   Ship,
   Anchor,
@@ -68,18 +67,8 @@ export default function LandingPage() {
 
       if (address) {
         setWalletAddress(address);
-
-        // Check if wallet exists in our mock data (known users)
-        const isKnownShipOwner = mockShipOwner.xrplWallet === address;
-        const isKnownCharterer = mockCharterer.xrplWallet === address;
-
-        if (isKnownShipOwner || isKnownCharterer) {
-          // Known user - go to dashboard
-          router.push('/dashboard');
-        } else {
-          // New user - go to onboarding
-          router.push('/onboarding');
-        }
+        // Route to onboarding for all new connections
+        router.push('/onboarding');
       }
     } catch (error) {
       console.error('Wallet connection failed:', error);

@@ -1,10 +1,8 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
-import { didService, credentialService } from '@/services/api';
-import type { Credential, ShipownerDID } from '@/types';
 import {
   Building2,
   FileText,
@@ -34,7 +32,7 @@ import {
 type Step = 'wallet-connect' | 'did-company-info' | 'documents' | 'verification' | 'vc-issuance';
 type VerificationStatus = 'pending' | 'uploading-ipfs' | 'awaiting-review' | 'verified' | 'failed';
 type DocumentStatus = 'not-uploaded' | 'uploaded' | 'verifying' | 'verified' | 'rejected';
-type DIDStatus = 'pending' | 'checking' | 'creating' | 'created' | 'failed';
+type DIDStatus = 'pending' | 'checking' | 'found' | 'not-found' | 'creating' | 'created' | 'failed';
 type VCStatus = 'pending' | 'issuing' | 'issued' | 'failed';
 
 interface CompanyInfo {
@@ -81,18 +79,13 @@ export default function OnboardingPage() {
   const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>('pending');
   const [ipfsCid, setIpfsCid] = useState<string | null>(null);
 
-  // Wallet connection state
+  // UI state management
   const [connectedWalletAddress, setConnectedWalletAddress] = useState<string | null>(null);
   const [isConnectingWallet, setIsConnectingWallet] = useState(false);
-
-  // DID state
-  const [existingDID, setExistingDID] = useState<ShipownerDID | null>(null);
   const [didStatus, setDidStatus] = useState<DIDStatus>('pending');
-  const [createdDID, setCreatedDID] = useState<ShipownerDID | null>(null);
-
-  // VC state
+  const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>('pending');
   const [vcStatus, setVcStatus] = useState<VCStatus>('pending');
-  const [verificationCredential, setVerificationCredential] = useState<Credential | null>(null);
+  const [ipfsCid, setIpfsCid] = useState<string | null>(null);
 
   const currentStepIndex = steps.findIndex(s => s.id === currentStep);
   const progress = ((currentStepIndex + 1) / steps.length) * 100;
@@ -125,14 +118,11 @@ export default function OnboardingPage() {
     }));
   };
 
-  // Get the active DID (either existing or newly created)
-  const activeDID = existingDID || createdDID;
-
   const canProceed = () => {
     switch (currentStep) {
       case 'wallet-connect':
-        // Can proceed if wallet connected and DID check is complete
-        return connectedWalletAddress !== null && didStatus !== 'checking';
+        // Can proceed if wallet connected and DID check is not running and no network failure
+        return connectedWalletAddress !== null && didStatus !== 'checking' && didStatus !== 'failed';
       case 'did-company-info':
         // Can proceed if DID exists (either pre-existing or just created)
         return activeDID !== null;
@@ -150,25 +140,16 @@ export default function OnboardingPage() {
   const handleNext = () => {
     const nextIndex = currentStepIndex + 1;
     if (nextIndex < steps.length) {
-      let targetStep = steps[nextIndex].id;
-
-      // If coming from wallet-connect and DID already exists, skip did-company-info step
-      if (currentStep === 'wallet-connect' && existingDID) {
-        // Pre-populate company info from existing DID
-        setCompanyInfo(prev => ({
-          ...prev,
-          companyName: existingDID.companyName,
-          registrationNumber: existingDID.registrationNumber,
-          countryOfIncorporation: existingDID.country,
-        }));
-        // Skip to documents step
-        targetStep = 'documents';
-      }
-
+      const targetStep = steps[nextIndex].id;
       setCurrentStep(targetStep);
 
+      // Simulate IPFS upload when reaching verification step
       if (targetStep === 'verification') {
-        simulateIPFSUpload();
+        setVerificationStatus('uploading-ipfs');
+        setTimeout(() => {
+          setIpfsCid('QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco');
+          setVerificationStatus('awaiting-review');
+        }, 2000);
       }
     }
   };
@@ -180,128 +161,31 @@ export default function OnboardingPage() {
     }
   };
 
-  const simulateIPFSUpload = () => {
-    setVerificationStatus('uploading-ipfs');
+  const handleConnectWallet = () => {
+    setIsConnectingWallet(true);
+    // Simulate wallet connection
     setTimeout(() => {
-      setIpfsCid('QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco');
-      setVerificationStatus('awaiting-review');
-    }, 3000);
+      setConnectedWalletAddress('rXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
+      setIsConnectingWallet(false);
+      setDidStatus('not-found');
+    }, 1500);
   };
 
-  // Connect Crossmark wallet and check for existing DID
-  const handleConnectWallet = useCallback(async () => {
-    setIsConnectingWallet(true);
-    setDidStatus('pending');
-
-    try {
-      const sdk = (await import('@crossmarkio/sdk')).default;
-
-      // Check if Crossmark is installed
-      const isConnected = await sdk.async.connect();
-
-      if (!isConnected) {
-        alert('Crossmark is not installed. Please install the Crossmark browser extension.');
-        setIsConnectingWallet(false);
-        return;
-      }
-
-      // Sign in to get wallet access
-      await sdk.async.signInAndWait();
-
-      // Get the wallet address from session
-      const address = sdk.session.address;
-
-      if (address) {
-        setConnectedWalletAddress(address);
-
-        // Check if this wallet already has a DID
-        setDidStatus('checking');
-        try {
-          const existingShipowner = await didService.getShipownerByWallet(address);
-          if (existingShipowner) {
-            setExistingDID(existingShipowner);
-            // Pre-populate company info
-            setCompanyInfo(prev => ({
-              ...prev,
-              companyName: existingShipowner.companyName,
-              registrationNumber: existingShipowner.registrationNumber,
-              countryOfIncorporation: existingShipowner.country,
-            }));
-          }
-        } catch {
-          // No existing DID found - that's fine
-        }
-        setDidStatus('pending');
-      }
-    } catch (error) {
-      console.error('Wallet connection failed:', error);
-      alert('Failed to connect wallet. Please try again.');
-    } finally {
-      setIsConnectingWallet(false);
-    }
-  }, []);
-
-  // Create DID with company info
-  const handleCreateDID = useCallback(async () => {
-    if (!connectedWalletAddress) return;
-
+  const handleCreateDID = () => {
     setDidStatus('creating');
-
-    try {
-      const shipownerDID = await didService.createShipowner({
-        walletAddress: connectedWalletAddress,
-        companyName: companyInfo.companyName,
-        registrationNumber: companyInfo.registrationNumber,
-        country: companyInfo.countryOfIncorporation,
-      });
-
-      setCreatedDID(shipownerDID);
+    // Simulate DID creation
+    setTimeout(() => {
       setDidStatus('created');
-    } catch (error) {
-      console.error('Failed to create DID:', error);
-      setDidStatus('failed');
-      // Fallback simulation for demo
-      setTimeout(() => {
-        setCreatedDID({
-          did: `did:xrpl:1:${connectedWalletAddress}`,
-          walletAddress: connectedWalletAddress,
-          companyName: companyInfo.companyName,
-          registrationNumber: companyInfo.registrationNumber,
-          country: companyInfo.countryOfIncorporation,
-          isVerified: false,
-          createdAt: new Date().toISOString(),
-        });
-        setDidStatus('created');
-      }, 2000);
-    }
-  }, [connectedWalletAddress, companyInfo]);
+    }, 1500);
+  };
 
-  // Issue verification credential
-  const handleIssueVC = useCallback(async () => {
-    if (!activeDID) return;
-
+  const handleIssueVC = () => {
     setVcStatus('issuing');
-
-    try {
-      const credential = await credentialService.issueShipownerCredential({
-        shipownerDid: activeDID.did,
-        companyName: companyInfo.companyName,
-        registrationNumber: companyInfo.registrationNumber,
-        country: companyInfo.countryOfIncorporation,
-        documentsVerified: ['certificate_of_incorporation', 'registry_extract'],
-      });
-
-      setVerificationCredential(credential);
+    // Simulate VC issuance
+    setTimeout(() => {
       setVcStatus('issued');
-    } catch (error) {
-      console.error('Failed to issue VC:', error);
-      setVcStatus('failed');
-      // Fallback simulation
-      setTimeout(() => {
-        setVcStatus('issued');
-      }, 2000);
-    }
-  }, [activeDID, companyInfo]);
+    }, 1500);
+  };
 
   const renderStepContent = () => {
     switch (currentStep) {
@@ -311,7 +195,6 @@ export default function OnboardingPage() {
             walletAddress={connectedWalletAddress}
             isConnecting={isConnectingWallet}
             didStatus={didStatus}
-            existingDID={existingDID}
             onConnect={handleConnectWallet}
           />
         );
@@ -322,7 +205,6 @@ export default function OnboardingPage() {
             onChange={handleCompanyInfoChange}
             walletAddress={connectedWalletAddress!}
             didStatus={didStatus}
-            createdDID={createdDID}
             onCreateDID={handleCreateDID}
           />
         );
@@ -342,17 +224,14 @@ export default function OnboardingPage() {
             verificationStatus={verificationStatus}
             ipfsCid={ipfsCid}
             walletAddress={connectedWalletAddress}
-            did={activeDID?.did}
           />
         );
       case 'vc-issuance':
         return (
           <VCIssuanceStep
             companyInfo={companyInfo}
-            did={activeDID!}
             ipfsCid={ipfsCid}
             vcStatus={vcStatus}
-            credential={verificationCredential}
             onIssueVC={handleIssueVC}
           />
         );
@@ -581,13 +460,11 @@ function WalletConnectStep({
   walletAddress,
   isConnecting,
   didStatus,
-  existingDID,
   onConnect,
 }: {
   walletAddress: string | null;
   isConnecting: boolean;
   didStatus: DIDStatus;
-  existingDID: ShipownerDID | null;
   onConnect: () => void;
 }) {
   return (
@@ -701,30 +578,37 @@ function WalletConnectStep({
               </div>
             )}
 
-            {existingDID && (
-              <div className="p-4 rounded-xl bg-rlusd-primary/5 border border-rlusd-primary/20">
-                <div className="flex items-start gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-rlusd-glow shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm text-text-primary font-medium">Existing DID Found</p>
-                    <p className="text-xs text-text-muted mt-1">
-                      Your wallet already has a DID registered. Company: {existingDID.companyName}
-                    </p>
-                    <code className="text-xs text-rlusd-glow font-mono mt-2 block">{existingDID.did}</code>
-                  </div>
-                </div>
-              </div>
-            )}
 
-            {!existingDID && didStatus !== 'checking' && (
+            {didStatus === 'not-found' && (
               <div className="p-4 rounded-xl bg-accent-amber/5 border border-accent-amber/20">
                 <div className="flex items-start gap-3">
                   <Fingerprint className="w-5 h-5 text-accent-amber shrink-0 mt-0.5" />
                   <div>
                     <p className="text-sm text-text-primary font-medium">No DID Found</p>
                     <p className="text-xs text-text-muted mt-1">
-                      In the next step, you&apos;ll create a Decentralized Identifier (DID) for your company.
+                      No DID was found — this is expected. In the next step we will create a Decentralized Identifier (DID) for your company.
                     </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {didStatus === 'failed' && (
+              <div className="p-4 rounded-xl bg-accent-coral/5 border border-accent-coral/20">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-accent-coral shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-text-primary font-medium">DID check failed</p>
+                    <p className="text-xs text-text-muted mt-1">There was a network or verification error. Please try again.</p>
+                    <div className="mt-3">
+                      <motion.button
+                        onClick={onConnect}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white text-sm"
+                        whileHover={{ scale: 1.02 }}
+                      >
+                        Retry
+                      </motion.button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -742,20 +626,18 @@ function DIDCompanyInfoStep({
   onChange,
   walletAddress,
   didStatus,
-  createdDID,
   onCreateDID,
 }: {
   companyInfo: CompanyInfo;
   onChange: (field: keyof CompanyInfo, value: string) => void;
   walletAddress: string;
   didStatus: DIDStatus;
-  createdDID: ShipownerDID | null;
   onCreateDID: () => void;
 }) {
   const canCreate = companyInfo.companyName && companyInfo.registrationNumber &&
                     companyInfo.countryOfIncorporation && companyInfo.contactEmail;
 
-  if (createdDID) {
+  if (didStatus === 'created') {
     // DID Created - show success state
     return (
       <div className="card">
@@ -793,17 +675,17 @@ function DIDCompanyInfoStep({
               <Fingerprint className="w-4 h-4 text-rlusd-primary" />
               <span className="text-xs text-rlusd-primary/80 font-medium">Your DID</span>
             </div>
-            <code className="font-mono text-sm text-rlusd-glow break-all">{createdDID.did}</code>
+            <code className="font-mono text-sm text-rlusd-glow break-all">did:xrpl:1:{walletAddress.substring(0, 20)}...</code>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
               <p className="text-xs text-text-muted mb-1">Company</p>
-              <p className="text-sm text-text-primary font-medium">{createdDID.companyName}</p>
+              <p className="text-sm text-text-primary font-medium">{companyInfo.companyName}</p>
             </div>
             <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
               <p className="text-xs text-text-muted mb-1">Registration</p>
-              <p className="text-sm text-text-primary font-mono">{createdDID.registrationNumber}</p>
+              <p className="text-sm text-text-primary font-mono">{companyInfo.registrationNumber}</p>
             </div>
           </div>
 
@@ -1169,14 +1051,12 @@ function VerificationStep({
   verificationStatus,
   ipfsCid,
   walletAddress,
-  did,
 }: {
   companyInfo: CompanyInfo;
   documents: { certificateOfIncorporation: Document; registryExtract: Document };
   verificationStatus: VerificationStatus;
   ipfsCid: string | null;
   walletAddress: string | null;
-  did: string | undefined;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -1365,17 +1245,13 @@ function VerificationStep({
 // Step 5: VC Issuance (final step)
 function VCIssuanceStep({
   companyInfo,
-  did,
   ipfsCid,
   vcStatus,
-  credential,
   onIssueVC,
 }: {
   companyInfo: CompanyInfo;
-  did: ShipownerDID;
   ipfsCid: string | null;
   vcStatus: VCStatus;
-  credential: Credential | null;
   onIssueVC: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -1431,7 +1307,7 @@ function VCIssuanceStep({
               <p className="text-xs uppercase tracking-wider text-text-muted mb-4">Your DID</p>
               <div className="flex items-center gap-2 p-3 rounded-lg bg-maritime-navy/50 border border-white/5">
                 <Fingerprint className="w-4 h-4 text-rlusd-primary shrink-0" />
-                <code className="text-xs font-mono text-rlusd-glow truncate">{did.did}</code>
+                <code className="text-xs font-mono text-rlusd-glow truncate">did:xrpl:1:rXxxxxxxxxxxxxxxxxxxxxxxxxxx</code>
               </div>
             </div>
 
@@ -1524,10 +1400,10 @@ function VCIssuanceStep({
               <div className="flex items-center justify-between gap-2 p-4 rounded-lg bg-maritime-navy/50 border border-white/5">
                 <div className="flex items-center gap-3 min-w-0">
                   <Fingerprint className="w-5 h-5 text-rlusd-primary shrink-0" />
-                  <code className="text-sm font-mono text-rlusd-glow truncate">{did.did}</code>
+                  <code className="text-sm font-mono text-rlusd-glow truncate">did:xrpl:1:rXxxxxxxxxxxxxxxxxxxxxxxxxxx</code>
                 </div>
                 <motion.button
-                  onClick={() => copyToClipboard(did.did)}
+                  onClick={() => copyToClipboard('did:xrpl:1:rXxxxxxxxxxxxxxxxxxxxxxxxxxx')}
                   className="p-2 rounded-lg hover:bg-maritime-steel/50 text-text-muted hover:text-text-primary transition-colors shrink-0"
                   whileHover={{ scale: 1.1 }}
                   whileTap={{ scale: 0.9 }}
@@ -1537,39 +1413,37 @@ function VCIssuanceStep({
               </div>
             </div>
 
-            {credential && (
-              <div className="p-5 rounded-xl bg-accent-violet/5 border border-accent-violet/20">
-                <div className="flex items-center gap-2 mb-4">
-                  <Shield className="w-5 h-5 text-accent-violet" />
-                  <p className="text-sm text-text-primary font-medium">Verification Credential</p>
+            <div className="p-5 rounded-xl bg-accent-violet/5 border border-accent-violet/20">
+              <div className="flex items-center gap-2 mb-4">
+                <Shield className="w-5 h-5 text-accent-violet" />
+                <p className="text-sm text-text-primary font-medium">Verification Credential</p>
+              </div>
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center justify-between py-2 border-b border-white/5">
+                  <span className="text-text-muted">Credential ID</span>
+                  <code className="text-xs text-accent-violet font-mono">VC-20240107-001</code>
                 </div>
-                <div className="space-y-3 text-sm">
-                  <div className="flex items-center justify-between py-2 border-b border-white/5">
-                    <span className="text-text-muted">Credential ID</span>
-                    <code className="text-xs text-accent-violet font-mono">{credential.id}</code>
-                  </div>
-                  <div className="flex items-center justify-between py-2 border-b border-white/5">
-                    <span className="text-text-muted">Type</span>
-                    <span className="text-text-primary">{credential.type}</span>
-                  </div>
-                  <div className="flex items-center justify-between py-2 border-b border-white/5">
-                    <span className="text-text-muted">Issuer</span>
-                    <span className="text-rlusd-glow text-xs">Maritime Finance Platform</span>
-                  </div>
-                  <div className="flex items-center justify-between py-2 border-b border-white/5">
-                    <span className="text-text-muted">Status</span>
-                    <span className="flex items-center gap-1 text-green-400">
-                      <CheckCircle2 className="w-3 h-3" />
-                      {credential.status}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between py-2">
-                    <span className="text-text-muted">Expires</span>
-                    <span className="text-text-primary">{new Date(credential.expiresAt).toLocaleDateString()}</span>
-                  </div>
+                <div className="flex items-center justify-between py-2 border-b border-white/5">
+                  <span className="text-text-muted">Type</span>
+                  <span className="text-text-primary">ShipownerVerification</span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-white/5">
+                  <span className="text-text-muted">Issuer</span>
+                  <span className="text-rlusd-glow text-xs">Maritime Finance Platform</span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-white/5">
+                  <span className="text-text-muted">Status</span>
+                  <span className="flex items-center gap-1 text-green-400">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Active
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-text-muted">Expires</span>
+                  <span className="text-text-primary">{new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toLocaleDateString()}</span>
                 </div>
               </div>
-            )}
+            </div>
 
             <div className="p-5 rounded-xl bg-rlusd-primary/5 border border-rlusd-primary/20">
               <div className="flex items-start gap-3">
