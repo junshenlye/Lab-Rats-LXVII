@@ -5,7 +5,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { connectCrossmarkWallet } from '@/lib/wallet';
 import { checkDidOnTestnet, createDID } from '@/lib/did';
-import { issueCredential, uploadDocuments } from '@/lib/credential';
+import { uploadDocuments } from '@/lib/credential';
+import { signAndSubmitCredentialWithCrossmark } from '@/lib/credential-submit';
+import {
+  connectAndGetAccountInfo,
+  submitSignedBlob,
+  disconnectClient,
+} from '@/lib/xrpl-browser-client';
 import {
   Building2,
   FileText,
@@ -69,8 +75,8 @@ const steps: { id: Step; label: string; icon: React.ElementType; description: st
   { id: 'wallet-connect', label: 'Connect Wallet', icon: Wallet, description: 'Connect Crossmark wallet' },
   { id: 'did-company-info', label: 'DID & Company', icon: Fingerprint, description: 'Create DID with company info' },
   { id: 'documents', label: 'Documents', icon: FileText, description: 'Upload KYC documents' },
-  { id: 'vc-pending', label: 'Verification Pending', icon: Clock, description: 'Platform verifying documents' },
-  { id: 'vc-accept', label: 'Accept Credential', icon: Shield, description: 'Accept your verification credential' },
+  { id: 'vc-pending', label: 'Pending', icon: Clock, description: 'Platform verifying documents' },
+  { id: 'vc-accept', label: 'Accept', icon: Shield, description: 'Accept your verification credential' },
 ];
 
 export default function OnboardingPage() {
@@ -99,6 +105,7 @@ export default function OnboardingPage() {
   const [vcErrorMessage, setVcErrorMessage] = useState<string | null>(null);
   const [credentialId, setCredentialId] = useState<string | null>(null);
   const [createTxHash, setCreateTxHash] = useState<string | null>(null);
+  const [credentialAlreadyExists, setCredentialAlreadyExists] = useState(false);
   const [acceptTxHash, setAcceptTxHash] = useState<string | null>(null);
   const [ipfsCid, setIpfsCid] = useState<string | null>(null);
 
@@ -192,41 +199,91 @@ export default function OnboardingPage() {
           console.log('[Onboarding] Documents uploaded, CID:', uploadResult.cid);
           setIpfsCid(uploadResult.cid);
 
-          // Now trigger backend to issue credential
-          console.log('[Onboarding] Issuing credential from backend...');
+          // Now trigger hybrid credential issuance:
+          // 1. Browser connects to XRPL and fetches issuer's sequence
+          // 2. Server signs transaction offline
+          // 3. Browser submits the pre-signed blob
+          console.log('[Onboarding] Starting hybrid credential issuance...');
           setVcStatus('awaiting-platform');
 
-          // Call backend to issue credential
-          const createResult = await fetch('/api/credential/create', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userAddress: connectedWalletAddress,
-              companyInfo: {
-                companyName: companyInfo.companyName,
-                registrationNumber: companyInfo.registrationNumber,
-                countryOfIncorporation: companyInfo.countryOfIncorporation,
-                contactEmail: companyInfo.contactEmail,
-              },
-              ipfsCid: uploadResult.cid,
-            }),
-          });
-
-          if (!createResult.ok) {
-            const errorData = await createResult.json();
-            throw new Error(errorData.error || 'Failed to issue credential');
+          // Step 1: Get issuer address from server
+          const issuerResponse = await fetch('/api/credential/issuer');
+          if (!issuerResponse.ok) {
+            throw new Error('Failed to get issuer address');
           }
+          const issuerData = await issuerResponse.json();
+          if (!issuerData.success || !issuerData.address) {
+            throw new Error(issuerData.error || 'Issuer not configured');
+          }
+          const issuerAddress = issuerData.address;
+          console.log('[Onboarding] Issuer address:', issuerAddress);
 
-          const createData = await createResult.json();
-          if (createData.success) {
-            console.log('[Onboarding] Credential created:', createData.credentialId);
-            setCredentialId(createData.credentialId);
-            setCreateTxHash(createData.transactionHash);
+          // Step 2: Browser connects to XRPL and fetches issuer's account info
+          console.log('[Onboarding] Connecting to XRPL to fetch issuer sequence...');
+          const { client: xrplClient, accountInfo } = await connectAndGetAccountInfo(issuerAddress);
+          console.log('[Onboarding] Issuer sequence:', accountInfo.sequence);
+
+          try {
+            // Step 3: Server signs the transaction offline
+            console.log('[Onboarding] Requesting server to sign transaction offline...');
+            const signResponse = await fetch('/api/credential/sign', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                userAddress: connectedWalletAddress,
+                companyInfo: {
+                  companyName: companyInfo.companyName,
+                  registrationNumber: companyInfo.registrationNumber,
+                  countryOfIncorporation: companyInfo.countryOfIncorporation,
+                  contactEmail: companyInfo.contactEmail,
+                },
+                ipfsCid: uploadResult.cid,
+                sequence: accountInfo.sequence,
+                lastLedgerSequence: accountInfo.lastLedgerSequence,
+              }),
+            });
+
+            if (!signResponse.ok) {
+              const errorData = await signResponse.json();
+              throw new Error(errorData.error || 'Failed to sign credential');
+            }
+
+            const signData = await signResponse.json();
+            if (!signData.success || !signData.signedBlob) {
+              throw new Error(signData.error || 'Credential signing failed');
+            }
+
+            console.log('[Onboarding] Transaction signed by server, hash:', signData.hash);
+
+            // Step 4: Browser submits the pre-signed blob to XRPL
+            console.log('[Onboarding] Submitting signed blob to XRPL...');
+            const submitResult = await submitSignedBlob(xrplClient, signData.signedBlob);
+
+            if (!submitResult.success) {
+              throw new Error(submitResult.error || 'Failed to submit CredentialCreate');
+            }
+
+            // Check if credential already exists
+            const alreadyExists = submitResult.alreadyExists || false;
+            setCredentialAlreadyExists(alreadyExists);
+
+            if (alreadyExists) {
+              console.log('[Onboarding] Credential already exists! Proceeding to accept step.');
+            } else {
+              console.log('[Onboarding] CredentialCreate submitted successfully');
+            }
+            console.log('[Onboarding] Engine result:', submitResult.engineResult);
+
+            // Generate credential ID
+            const newCredentialId = `CRED-${Date.now()}-${connectedWalletAddress?.substring(0, 8)}`;
+            setCredentialId(newCredentialId);
+            setCreateTxHash(alreadyExists ? null : signData.hash);
 
             // Credential is ready to accept
             setVcStatus('ready-to-accept');
-          } else {
-            throw new Error(createData.error || 'Credential creation failed');
+          } finally {
+            // Always disconnect XRPL client
+            await disconnectClient(xrplClient);
           }
         } catch (error) {
           console.error('[Onboarding] Error:', error);
@@ -380,7 +437,8 @@ export default function OnboardingPage() {
 
       console.log('[Onboarding] Accepting credential for wallet:', connectedWalletAddress);
 
-      // Call the credential accept endpoint which will trigger Crossmark
+      // Step 1: Get the naked CredentialAccept transaction from server
+      console.log('[Onboarding] Step 1: Fetching naked CredentialAccept transaction...');
       const result = await fetch('/api/credential/accept', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -391,19 +449,29 @@ export default function OnboardingPage() {
 
       if (!result.ok) {
         const errorData = await result.json();
-        throw new Error(errorData.error || 'Failed to accept credential');
+        throw new Error(errorData.error || 'Failed to build accept transaction');
       }
 
       const acceptData = await result.json();
-      if (acceptData.success) {
-        console.log('[Onboarding] Credential accepted successfully');
-        console.log('[Onboarding] Accept TX Hash:', acceptData.transactionHash);
-
-        setAcceptTxHash(acceptData.transactionHash || null);
-        setVcStatus('accepted');
-      } else {
-        throw new Error(acceptData.error || 'Credential acceptance failed');
+      if (!acceptData.success || !acceptData.transaction) {
+        throw new Error(acceptData.error || 'Failed to build accept transaction');
       }
+
+      console.log('[Onboarding] Naked transaction received:', acceptData.transaction);
+
+      // Step 2: Sign and submit with Crossmark wallet
+      console.log('[Onboarding] Step 2: Sending to Crossmark for signing...');
+      const crossmarkResult = await signAndSubmitCredentialWithCrossmark(acceptData.transaction);
+
+      if (!crossmarkResult.success) {
+        throw new Error(crossmarkResult.error || 'Crossmark signing failed');
+      }
+
+      console.log('[Onboarding] Credential accepted successfully!');
+      console.log('[Onboarding] Accept TX Hash:', crossmarkResult.transactionHash);
+
+      setAcceptTxHash(crossmarkResult.transactionHash || null);
+      setVcStatus('accepted');
     } catch (error) {
       console.error('[Onboarding] Credential acceptance error:', error);
       setVcStatus('failed');
@@ -451,6 +519,7 @@ export default function OnboardingPage() {
             credentialId={credentialId}
             createTxHash={createTxHash}
             companyInfo={companyInfo}
+            credentialAlreadyExists={credentialAlreadyExists}
           />
         );
       case 'vc-accept':
@@ -1400,12 +1469,14 @@ function VCPendingStep({
   credentialId,
   createTxHash,
   companyInfo,
+  credentialAlreadyExists,
 }: {
   vcStatus: VCStatus;
   vcErrorMessage: string | null;
   credentialId: string | null;
   createTxHash: string | null;
   companyInfo: CompanyInfo;
+  credentialAlreadyExists: boolean;
 }) {
   return (
     <div className="card">
@@ -1422,14 +1493,14 @@ function VCPendingStep({
               <Clock className="w-6 h-6 text-accent-amber" />
             )}
           </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="font-display text-xl font-semibold text-text-primary truncate">
+          <div>
+            <h2 className="font-display text-xl font-semibold text-text-primary">
               {vcStatus === 'ready-to-accept' ? 'Credential Ready!' : 'Verification Pending'}
             </h2>
-            <p className="text-sm text-text-muted truncate">
+            <p className="text-sm text-text-muted">
               {vcStatus === 'ready-to-accept'
                 ? 'Your credential is ready to accept'
-                : 'Platform is verifying your documents...'}
+                : 'Platform verifying documents'}
             </p>
           </div>
         </div>
@@ -1482,9 +1553,31 @@ function VCPendingStep({
               >
                 <CheckCircle2 className="w-10 h-10 text-rlusd-glow" />
               </motion.div>
-              <h3 className="text-xl font-display font-semibold text-text-primary">Verified!</h3>
-              <p className="text-sm text-text-secondary mt-1">Your company has been verified</p>
+              <h3 className="text-xl font-display font-semibold text-text-primary">
+                {credentialAlreadyExists ? 'Credential Already Issued!' : 'Verified!'}
+              </h3>
+              <p className="text-sm text-text-secondary mt-1">
+                {credentialAlreadyExists
+                  ? 'Your KYC credential was previously issued. Please accept it below.'
+                  : 'Your company has been verified'}
+              </p>
             </motion.div>
+
+            {/* Already exists notice */}
+            {credentialAlreadyExists && (
+              <div className="p-4 rounded-xl bg-accent-sky/5 border border-accent-sky/20">
+                <div className="flex items-start gap-3">
+                  <Shield className="w-5 h-5 text-accent-sky shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-text-primary font-medium">Credential Found on XRPL</p>
+                    <p className="text-xs text-text-muted mt-1">
+                      A KYC credential has already been issued for your wallet address.
+                      You just need to accept it to complete your onboarding.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Credential Details */}
             <div className="p-5 rounded-xl bg-rlusd-primary/5 border border-rlusd-primary/20">
@@ -1503,7 +1596,7 @@ function VCPendingStep({
                 </div>
                 <div className="flex items-center justify-between py-2 border-b border-white/5">
                   <span className="text-text-muted">Type</span>
-                  <span className="text-rlusd-glow">KYC_VERIFIED</span>
+                  <span className="text-rlusd-glow">KYC</span>
                 </div>
                 {credentialId && (
                   <div className="flex items-center justify-between py-2">
@@ -1644,7 +1737,7 @@ function VCAcceptStep({
                 </div>
                 <div className="flex items-center justify-between py-2 border-b border-white/5">
                   <span className="text-text-muted">Type</span>
-                  <span className="text-rlusd-glow">KYC_VERIFIED</span>
+                  <span className="text-rlusd-glow">KYC</span>
                 </div>
                 <div className="flex items-center justify-between py-2">
                   <span className="text-text-muted">Status</span>
@@ -1735,7 +1828,7 @@ function VCAcceptStep({
                 <CheckCircle2 className="w-12 h-12 text-rlusd-glow" />
               </motion.div>
               <h3 className="text-2xl font-display font-semibold text-text-primary">Onboarding Complete!</h3>
-              <p className="text-text-secondary mt-2">Your KYC_VERIFIED credential has been issued on XRPL</p>
+              <p className="text-text-secondary mt-2">Your KYC credential has been issued on XRPL</p>
             </motion.div>
 
             {/* DID Display */}
@@ -1769,7 +1862,7 @@ function VCAcceptStep({
                 </div>
                 <div className="flex items-center justify-between py-2 border-b border-white/5">
                   <span className="text-text-muted">Type</span>
-                  <span className="text-text-primary">KYC_VERIFIED</span>
+                  <span className="text-text-primary">KYC</span>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b border-white/5">
                   <span className="text-text-muted">Issuer</span>
@@ -1815,18 +1908,33 @@ function VCAcceptStep({
                   )}
                   {acceptTxHash && (
                     <div>
-                      <p className="text-xs text-text-muted mb-2">CredentialAccept (You signed)</p>
+                      <p className="text-xs text-text-muted mb-2">
+                        CredentialAccept (You signed)
+                        {acceptTxHash.startsWith('DEMO_') && (
+                          <span className="ml-2 px-2 py-0.5 rounded-full bg-accent-amber/20 text-accent-amber text-[10px]">
+                            Demo Mode
+                          </span>
+                        )}
+                      </p>
                       <div className="flex items-center gap-2">
                         <code className="text-xs font-mono text-rlusd-glow truncate flex-1">{acceptTxHash}</code>
-                        <a
-                          href={`https://testnet.xrpl.org/transactions/${acceptTxHash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-2 rounded-lg hover:bg-maritime-steel/50 text-text-muted hover:text-rlusd-glow transition-colors shrink-0"
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                        </a>
+                        {!acceptTxHash.startsWith('DEMO_') && (
+                          <a
+                            href={`https://testnet.xrpl.org/transactions/${acceptTxHash}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-2 rounded-lg hover:bg-maritime-steel/50 text-text-muted hover:text-rlusd-glow transition-colors shrink-0"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                          </a>
+                        )}
                       </div>
+                      {acceptTxHash.startsWith('DEMO_') && (
+                        <p className="text-[10px] text-accent-amber/70 mt-2">
+                          Note: Crossmark SDK doesn&apos;t support CredentialAccept (XLS-70) yet.
+                          This step is simulated for demo purposes.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>

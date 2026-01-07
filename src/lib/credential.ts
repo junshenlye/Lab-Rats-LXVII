@@ -2,14 +2,22 @@
  * Credential Issuance Frontend Logic
  * Orchestrates the full credential issuance flow:
  * 1. Upload documents to mock IPFS
- * 2. Issue credential (backend creates and signs CredentialCreate)
+ * 2. Issue credential (browser connects to XRPL, server signs offline, browser submits)
  * 3. Accept credential (user signs CredentialAccept with Crossmark)
  *
  * IMPORTANT: Crossmark is a smart wallet - send "naked" transactions only!
  * No autofill needed - Crossmark handles Sequence, Fee, LastLedgerSequence automatically.
+ *
+ * For CredentialCreate: We use hybrid approach - server signs offline, browser submits
+ * This avoids WebSocket issues in serverless environments.
  */
 
 import { signAndSubmitCredentialWithCrossmark } from './credential-submit';
+import {
+  connectAndGetAccountInfo,
+  submitSignedBlob,
+  disconnectClient,
+} from './xrpl-browser-client';
 
 export interface IssueCredentialParams {
   userAddress: string;
@@ -31,51 +39,87 @@ export interface IssueCredentialResult {
 }
 
 /**
- * Full credential issuance flow
- * 1. Issue credential (backend creates and signs CredentialCreate)
- * 2. Accept credential (user signs CredentialAccept with Crossmark - NO autofill needed)
+ * Full credential issuance flow (Hybrid: Server-Sign, Browser-Submit)
+ * 1. Browser connects to XRPL and fetches issuer's sequence number
+ * 2. Server signs transaction offline (no XRPL connection needed)
+ * 3. Browser submits the pre-signed blob to XRPL
+ * 4. Accept credential (user signs CredentialAccept with Crossmark)
  *
  * @param params - User address, company info, and IPFS CID
+ * @param issuerAddress - The issuer's XRPL address (fetched from server)
  * @returns Result with credential ID and transaction hashes
  */
 export async function issueCredential(
-  params: IssueCredentialParams
+  params: IssueCredentialParams,
+  issuerAddress: string
 ): Promise<IssueCredentialResult> {
+  let xrplClient: Awaited<ReturnType<typeof connectAndGetAccountInfo>>['client'] | null = null;
+
   try {
-    console.log('[Credential] Starting issuance flow...');
+    console.log('[Credential] Starting issuance flow (hybrid approach)...');
     console.log('[Credential] User address:', params.userAddress);
+    console.log('[Credential] Issuer address:', issuerAddress);
     console.log('[Credential] IPFS CID:', params.ipfsCid);
 
-    // Step 1: Create credential (issuer-signed on backend)
-    console.log('[Credential] Step 1: Creating credential (issuer signing)...');
+    // Step 1: Browser connects to XRPL and fetches issuer's account info
+    console.log('[Credential] Step 1: Connecting to XRPL and fetching issuer sequence...');
 
-    const createResponse = await fetch('/api/credential/create', {
+    const { client, accountInfo } = await connectAndGetAccountInfo(issuerAddress);
+    xrplClient = client;
+
+    console.log('[Credential] Connected! Issuer sequence:', accountInfo.sequence);
+    console.log('[Credential] Last ledger sequence:', accountInfo.lastLedgerSequence);
+
+    // Step 2: Server signs the transaction offline
+    console.log('[Credential] Step 2: Requesting server to sign transaction offline...');
+
+    const signResponse = await fetch('/api/credential/sign', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userAddress: params.userAddress,
         companyInfo: params.companyInfo,
         ipfsCid: params.ipfsCid,
+        sequence: accountInfo.sequence,
+        lastLedgerSequence: accountInfo.lastLedgerSequence,
       }),
     });
 
-    if (!createResponse.ok) {
-      const errorData = await createResponse.json();
-      throw new Error(errorData.error || 'Failed to create credential');
+    if (!signResponse.ok) {
+      const errorData = await signResponse.json();
+      throw new Error(errorData.error || 'Failed to sign credential');
     }
 
-    const createResult = await createResponse.json();
+    const signResult = await signResponse.json();
 
-    if (!createResult.success) {
-      throw new Error(createResult.error || 'Credential creation failed');
+    if (!signResult.success || !signResult.signedBlob) {
+      throw new Error(signResult.error || 'Credential signing failed');
+    }
+
+    console.log('[Credential] Transaction signed by server');
+    console.log('[Credential] Hash:', signResult.hash);
+
+    // Step 3: Browser submits the pre-signed blob to XRPL
+    console.log('[Credential] Step 3: Submitting signed blob to XRPL...');
+
+    const submitResult = await submitSignedBlob(xrplClient, signResult.signedBlob);
+
+    if (!submitResult.success) {
+      throw new Error(submitResult.error || 'Failed to submit CredentialCreate');
     }
 
     console.log('[Credential] CredentialCreate submitted successfully');
-    console.log('[Credential] Transaction hash:', createResult.transactionHash);
-    console.log('[Credential] Credential ID:', createResult.credentialId);
+    console.log('[Credential] Engine result:', submitResult.engineResult);
 
-    // Step 2: Build CredentialAccept transaction (naked - no Sequence/Fee/etc)
-    console.log('[Credential] Step 2: Building naked CredentialAccept transaction...');
+    // Generate credential ID
+    const credentialId = `CRED-${Date.now()}-${params.userAddress.substring(0, 8)}`;
+
+    // Disconnect XRPL client before Crossmark step
+    await disconnectClient(xrplClient);
+    xrplClient = null;
+
+    // Step 4: Build CredentialAccept transaction (naked - no Sequence/Fee/etc)
+    console.log('[Credential] Step 4: Building naked CredentialAccept transaction...');
 
     const acceptResponse = await fetch('/api/credential/accept', {
       method: 'POST',
@@ -99,26 +143,25 @@ export async function issueCredential(
     console.log('[Credential] CredentialAccept transaction built (naked)');
     console.log('[Credential] Transaction:', acceptResult.transaction);
 
-    // Step 3: Sign and submit with Crossmark (NO autofill needed!)
-    // Crossmark is a smart wallet - it handles Sequence, Fee, LastLedgerSequence automatically
-    console.log('[Credential] Step 3: Sending to Crossmark signAndSubmit...');
+    // Step 5: Sign and submit with Crossmark (NO autofill needed!)
+    console.log('[Credential] Step 5: Sending to Crossmark signAndSubmit...');
 
-    const submitResult = await signAndSubmitCredentialWithCrossmark(acceptResult.transaction);
+    const crossmarkResult = await signAndSubmitCredentialWithCrossmark(acceptResult.transaction);
 
-    if (!submitResult.success) {
-      throw new Error(submitResult.error || 'Failed to accept credential');
+    if (!crossmarkResult.success) {
+      throw new Error(crossmarkResult.error || 'Failed to accept credential');
     }
 
     console.log('[Credential] CredentialAccept submitted successfully');
-    console.log('[Credential] Accept transaction hash:', submitResult.transactionHash);
+    console.log('[Credential] Accept transaction hash:', crossmarkResult.transactionHash);
 
     console.log('[Credential] Credential issuance complete!');
 
     return {
       success: true,
-      credentialId: createResult.credentialId,
-      createTxHash: createResult.transactionHash,
-      acceptTxHash: submitResult.transactionHash,
+      credentialId,
+      createTxHash: signResult.hash,
+      acceptTxHash: crossmarkResult.transactionHash,
     };
   } catch (error) {
     console.error('[Credential] Error:', error);
@@ -126,6 +169,11 @@ export async function issueCredential(
       success: false,
       error: error instanceof Error ? error.message : 'Credential issuance failed',
     };
+  } finally {
+    // Always cleanup XRPL connection
+    if (xrplClient) {
+      await disconnectClient(xrplClient);
+    }
   }
 }
 

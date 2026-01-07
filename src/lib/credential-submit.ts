@@ -1,10 +1,13 @@
 /**
  * Credential Transaction Submission with Crossmark
- * Uses Crossmark's signAndSubmit for automatic handling of sequence/fees
  *
- * IMPORTANT: Crossmark is a smart wallet - send "naked" transactions only!
- * Do NOT include: Sequence, Fee, LastLedgerSequence, NetworkID
- * Crossmark will handle all of these automatically.
+ * NOTE: Crossmark SDK uses xrpl@2.14.1 which doesn't recognize
+ * CredentialAccept as a valid TransactionType. The Credentials amendment
+ * was enabled on XRPL mainnet on September 4, 2025, but Crossmark SDK
+ * hasn't been updated yet.
+ *
+ * DEMO MODE: For now, we simulate the CredentialAccept in demo mode.
+ * This allows the demo to proceed while Crossmark updates their SDK.
  */
 
 interface CredentialAcceptTransaction {
@@ -18,125 +21,122 @@ interface SubmitCredentialResult {
   success: boolean;
   transactionHash?: string;
   error?: string;
+  demoMode?: boolean;
 }
 
+// Demo mode flag - set to true to simulate CredentialAccept
+// Set to false to attempt real Crossmark signing (will fail until Crossmark updates)
+const DEMO_MODE = true;
+
 /**
- * Sign and submit CredentialAccept with Crossmark wallet
- * Uses signAndSubmit (NOT sign) to let Crossmark handle everything
+ * Sign CredentialAccept with Crossmark and submit to XRPL
  *
- * @param transaction - The "naked" CredentialAccept transaction (no Sequence/Fee/etc)
+ * NOTE: Currently in DEMO MODE because Crossmark SDK (xrpl@2.14.1) doesn't
+ * support the CredentialAccept transaction type (XLS-70).
+ *
+ * In demo mode, we simulate a successful acceptance.
+ * When Crossmark updates their SDK, set DEMO_MODE = false.
+ *
+ * @param transaction - The CredentialAccept transaction fields
  * @returns Result with transaction hash or error
  */
 export async function signAndSubmitCredentialWithCrossmark(
   transaction: CredentialAcceptTransaction
 ): Promise<SubmitCredentialResult> {
+  // Check if running in browser
+  if (typeof window === 'undefined') {
+    return {
+      success: false,
+      error: 'Crossmark signing only available in browser',
+    };
+  }
+
+  // Import Crossmark SDK to verify connection
+  const { default: sdk } = await import('@crossmarkio/sdk');
+
+  // Verify Crossmark is connected
+  if (!sdk.session?.address) {
+    return {
+      success: false,
+      error: 'Crossmark wallet not connected',
+    };
+  }
+
+  console.log('[Credential Submit] Starting CredentialAccept flow');
+  console.log('[Credential Submit] Account:', transaction.Account);
+  console.log('[Credential Submit] Issuer:', transaction.Issuer);
+  console.log('[Credential Submit] CredentialType:', transaction.CredentialType);
+
+  if (DEMO_MODE) {
+    // DEMO MODE: Simulate successful acceptance
+    console.log('[Credential Submit] ⚠️ DEMO MODE: Simulating CredentialAccept');
+    console.log('[Credential Submit] Note: Crossmark SDK does not yet support CredentialAccept (XLS-70)');
+
+    // Simulate a small delay for realism
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    // Generate a demo transaction hash
+    const demoHash = `DEMO_${Date.now().toString(16).toUpperCase()}_CREDENTIAL_ACCEPT`;
+
+    console.log('[Credential Submit] ✓ Demo CredentialAccept simulated');
+    console.log('[Credential Submit] Demo Hash:', demoHash);
+
+    return {
+      success: true,
+      transactionHash: demoHash,
+      demoMode: true,
+    };
+  }
+
+  // REAL MODE: Attempt to use Crossmark (will likely fail)
   try {
-    // Check if running in browser
-    if (typeof window === 'undefined') {
-      return {
-        success: false,
-        error: 'Crossmark signing only available in browser',
-      };
-    }
+    console.log('[Credential Submit] Attempting real Crossmark signing...');
 
-    // Import Crossmark SDK
-    const { default: sdk } = await import('@crossmarkio/sdk');
-
-    // Verify Crossmark is connected
-    if (!sdk.session?.address) {
-      return {
-        success: false,
-        error: 'Crossmark wallet not connected',
-      };
-    }
-
-    console.log('[Credential Submit] Preparing naked CredentialAccept transaction');
-
-    // Build the NAKED transaction - Crossmark handles Sequence, Fee, LastLedgerSequence
+    // Build the transaction
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const nakedTx: any = {
+    const preparedTx: any = {
       TransactionType: 'CredentialAccept',
       Account: transaction.Account,
       Issuer: transaction.Issuer,
       CredentialType: transaction.CredentialType,
     };
 
-    console.log('[Credential Submit] Naked transaction (no Sequence/Fee/etc):', nakedTx);
-    console.log('[Credential Submit] Calling Crossmark signAndSubmitAndWait...');
-
-    // Use sdk.async.signAndSubmitAndWait() - Crossmark SDK pattern
-    // Returns: { request, response, createdAt, resolvedAt }
+    // Try signAndSubmitAndWait
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { request, response, createdAt, resolvedAt } = await (sdk.async.signAndSubmitAndWait(nakedTx) as any);
+    const result = await (sdk.async.signAndSubmitAndWait(preparedTx) as any);
 
-    console.log('[Credential Submit] Crossmark response:', { request, response, createdAt, resolvedAt });
+    console.log('[Credential Submit] Crossmark response:', result);
 
-    if (!response) {
-      console.error('[Credential Submit] ERROR: No response from Crossmark');
-      return {
-        success: false,
-        error: 'Crossmark did not respond. Please try again.',
-      };
-    }
+    const txResult = result?.response?.result?.meta?.TransactionResult ||
+                     result?.response?.result?.engine_result;
+    const txHash = result?.response?.result?.hash ||
+                   result?.response?.result?.tx_json?.hash;
 
-    // Parse response from XRPL
-    // Response structure: response.result.meta.TransactionResult
-    const txResult = response?.result?.meta?.TransactionResult || response?.result?.engine_result;
-    const txHash = response?.result?.hash || response?.result?.tx_json?.hash;
-
-    console.log('[Credential Submit] Transaction result:', txResult);
-    console.log('[Credential Submit] Transaction hash:', txHash);
-
-    if (txResult === 'tesSUCCESS') {
+    if (txResult === 'tesSUCCESS' || txHash) {
       console.log('[Credential Submit] ✓ CredentialAccept submitted successfully!');
       return {
         success: true,
         transactionHash: txHash,
       };
-    } else if (txResult) {
-      // Transaction was submitted but failed
-      console.error('[Credential Submit] Transaction failed:', txResult);
-      return {
-        success: false,
-        error: `Transaction failed: ${txResult}`,
-      };
-    } else {
-      // Check if we got a hash - might be pending
-      if (txHash) {
-        console.log('[Credential Submit] Transaction submitted, hash:', txHash);
-        return {
-          success: true,
-          transactionHash: txHash,
-        };
-      }
-
-      // Check for error in response
-      const errorMsg = response.error || response.message || 'Unknown error from Crossmark';
-      console.error('[Credential Submit] Error:', errorMsg);
-      return {
-        success: false,
-        error: errorMsg,
-      };
     }
+
+    return {
+      success: false,
+      error: txResult || 'Transaction failed',
+    };
   } catch (error) {
     console.error('[Credential Submit] Exception:', error);
 
     let errorMessage = 'Failed to submit credential transaction';
 
     if (error instanceof Error) {
-      if (
+      if (error.message.includes('Invalid field TransactionType')) {
+        errorMessage = 'Crossmark does not support CredentialAccept yet (XLS-70). The Crossmark SDK needs to be updated to support this new transaction type.';
+      } else if (
         error.message.includes('cancelled') ||
-        error.message.includes('rejected') ||
-        error.message.includes('Cancelled') ||
-        error.message.includes('denied')
+        error.message.includes('rejected')
       ) {
         errorMessage = 'You cancelled the transaction in Crossmark.';
-      } else if (error.message.includes('timeout')) {
-        errorMessage = 'Transaction timed out. Please try again.';
-      } else if (error.message.includes('network') || error.message.includes('connection')) {
-        errorMessage = 'Network error. Please check your connection.';
-      } else if (error.message.includes('not found') || error.message.includes('No such account')) {
-        errorMessage = 'Account not found on XRPL testnet. Please fund your wallet.';
       } else {
         errorMessage = error.message;
       }

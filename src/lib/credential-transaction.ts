@@ -25,7 +25,6 @@ export interface CredentialCreateTransaction {
   Subject: string;
   CredentialType: string;
   URI?: string;
-  Data?: string;
   Fee: string;
 }
 
@@ -41,11 +40,12 @@ export interface CredentialAcceptTransaction {
 }
 
 /**
- * Get the hex-encoded credential type for KYC_VERIFIED
+ * Get the hex-encoded credential type for KYC
  * This is consistent across all credential transactions
+ * IMPORTANT: Must match exactly between CredentialCreate and CredentialAccept
  */
 export function getKYCCredentialType(): string {
-  return toHex('KYC_VERIFIED');
+  return toHex('KYC');
 }
 
 /**
@@ -64,32 +64,23 @@ export function buildCredentialCreateTransaction(
   const ipfsUri = `ipfs://${data.ipfsCid}`;
   const uriHex = toHex(ipfsUri);
 
-  // Build company data JSON and encode to hex
-  const companyData = {
-    companyName: data.companyInfo.companyName,
-    registrationNumber: data.companyInfo.registrationNumber,
-    country: data.companyInfo.countryOfIncorporation,
-    email: data.companyInfo.contactEmail,
-    verifiedAt: new Date().toISOString(),
-    credentialType: 'KYC_VERIFIED',
-  };
-  const dataHex = toHex(JSON.stringify(companyData));
-
   console.log('[CredentialCreate] Building transaction:', {
     issuer: data.issuerAddress,
     subject: data.userAddress,
-    credentialType: 'KYC_VERIFIED',
+    credentialType: 'KYC',
     credentialTypeHex: credentialType,
     uri: ipfsUri,
+    uriHex: uriHex,
   });
 
+  // Note: XLS-70 CredentialCreate only supports: Account, Subject, CredentialType, URI
+  // The Data field is NOT part of the spec - use URI to point to off-chain data
   return {
     TransactionType: 'CredentialCreate',
     Account: data.issuerAddress,
     Subject: data.userAddress,
     CredentialType: credentialType,
     URI: uriHex,
-    Data: dataHex,
     Fee: '12',
   };
 }
