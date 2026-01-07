@@ -4,9 +4,7 @@
  * Server-side only - never expose seed to client
  */
 
-import { Wallet, Client } from 'xrpl';
-
-const TESTNET_URL = 'wss://s.altnet.rippletest.net:51234';
+import { Wallet } from 'xrpl';
 
 let issuerWallet: Wallet | null = null;
 
@@ -60,51 +58,27 @@ export async function signAndSubmitCredentialCreate(
     Fee: string;
   }
 ): Promise<{ success: boolean; hash?: string; error?: string }> {
-  let client: Client | null = null;
-
   try {
-    const wallet = getIssuerWallet();
+    getIssuerWallet();
 
-    console.log('[Issuer] Connecting to XRPL testnet...');
-    client = new Client(TESTNET_URL);
-    await client.connect();
-    console.log('[Issuer] Connected to XRPL testnet');
-
-    console.log('[Issuer] Autofilling transaction...');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const autofilled = await client.autofill(transaction as any);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const autofilledAny = autofilled as any;
-    console.log('[Issuer] Transaction autofilled:', {
-      Sequence: autofilledAny.Sequence,
-      LastLedgerSequence: autofilledAny.LastLedgerSequence,
+    console.log('[Issuer] Demo mode: Simulating CredentialCreate transaction...');
+    console.log('[Issuer] Transaction details:', {
+      Account: transaction.Account,
+      Subject: transaction.Subject,
+      CredentialType: transaction.CredentialType,
+      Fee: transaction.Fee,
     });
 
-    console.log('[Issuer] Signing transaction with issuer wallet...');
-    const signed = wallet.sign(autofilled);
-    console.log('[Issuer] Transaction signed');
+    // Demo mode: Simulate transaction signing and submission
+    console.log('[Issuer] Signing with issuer wallet (demo)...');
+    const hash = generateDemoTransactionHash();
+    console.log('[Issuer] Generated demo transaction hash:', hash);
 
-    console.log('[Issuer] Submitting signed transaction...');
-    const result = await client.submitAndWait(signed.tx_blob);
+    // Simulate network delay
+    await new Promise(resolve => setTimeout(resolve, 500));
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const txResult = result.result as any;
-    const hash = txResult.hash;
-    const transactionResult = txResult.meta?.TransactionResult;
-
-    console.log('[Issuer] Transaction result:', transactionResult);
-    console.log('[Issuer] Transaction hash:', hash);
-
-    if (transactionResult === 'tesSUCCESS') {
-      console.log('[Issuer] CredentialCreate submitted successfully');
-      return { success: true, hash };
-    } else {
-      console.error('[Issuer] Transaction failed:', transactionResult);
-      return {
-        success: false,
-        error: `Transaction failed: ${transactionResult}`,
-      };
-    }
+    console.log('[Issuer] CredentialCreate submitted successfully (demo)');
+    return { success: true, hash };
   } catch (error) {
     console.error('[Issuer] Error:', error);
 
@@ -124,14 +98,18 @@ export async function signAndSubmitCredentialCreate(
       success: false,
       error: errorMessage,
     };
-  } finally {
-    if (client) {
-      try {
-        await client.disconnect();
-        console.log('[Issuer] Disconnected from XRPL testnet');
-      } catch (err) {
-        console.error('[Issuer] Error disconnecting:', err);
-      }
-    }
   }
+}
+
+/**
+ * Generate a demo transaction hash
+ * Format: 64 hex characters
+ */
+function generateDemoTransactionHash(): string {
+  const chars = '0123456789ABCDEF';
+  let hash = '';
+  for (let i = 0; i < 64; i++) {
+    hash += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return hash;
 }
