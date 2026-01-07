@@ -32,8 +32,7 @@ import {
   Key,
 } from 'lucide-react';
 
-type Step = 'wallet-connect' | 'did-company-info' | 'documents' | 'verification' | 'vc-issuance';
-type VerificationStatus = 'pending' | 'uploading-ipfs' | 'awaiting-review' | 'verified' | 'failed';
+type Step = 'wallet-connect' | 'did-company-info' | 'documents' | 'vc-pending' | 'vc-accept';
 type DocumentStatus = 'not-uploaded' | 'uploaded' | 'verifying' | 'verified' | 'rejected';
 type DIDStatus =
   | 'pending'
@@ -48,7 +47,7 @@ type DIDStatus =
   | 'created'            // Success
   | 'failed'             // General failure
   | 'testnet_error';     // Network issue
-type VCStatus = 'pending' | 'issuing' | 'accepting' | 'issued' | 'failed';
+type VCStatus = 'pending' | 'uploading-docs' | 'awaiting-platform' | 'ready-to-accept' | 'accepting' | 'accepted' | 'failed';
 
 interface CompanyInfo {
   companyName: string;
@@ -70,8 +69,8 @@ const steps: { id: Step; label: string; icon: React.ElementType; description: st
   { id: 'wallet-connect', label: 'Connect Wallet', icon: Wallet, description: 'Connect Crossmark wallet' },
   { id: 'did-company-info', label: 'DID & Company', icon: Fingerprint, description: 'Create DID with company info' },
   { id: 'documents', label: 'Documents', icon: FileText, description: 'Upload KYC documents' },
-  { id: 'verification', label: 'Verification', icon: Shield, description: 'Platform verification' },
-  { id: 'vc-issuance', label: 'VC Issuance', icon: Shield, description: 'Issue verification credential' },
+  { id: 'vc-pending', label: 'Verification Pending', icon: Clock, description: 'Platform verifying documents' },
+  { id: 'vc-accept', label: 'Accept Credential', icon: Shield, description: 'Accept your verification credential' },
 ];
 
 export default function OnboardingPage() {
@@ -96,7 +95,6 @@ export default function OnboardingPage() {
   const [didStatus, setDidStatus] = useState<DIDStatus>('pending');
   const [didErrorMessage, setDidErrorMessage] = useState<string | null>(null);
   const [didTransactionHash, setDidTransactionHash] = useState<string | null>(null);
-  const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>('pending');
   const [vcStatus, setVcStatus] = useState<VCStatus>('pending');
   const [vcErrorMessage, setVcErrorMessage] = useState<string | null>(null);
   const [credentialId, setCredentialId] = useState<string | null>(null);
@@ -138,21 +136,18 @@ export default function OnboardingPage() {
   const canProceed = () => {
     switch (currentStep) {
       case 'wallet-connect':
-        // Can proceed if wallet connected and DID check is complete (whether found or not-found)
-        // Cannot proceed if testnet is down or still checking
         return (
           connectedWalletAddress !== null &&
           (didStatus === 'found' || didStatus === 'not-found')
         );
       case 'did-company-info':
-        // Can proceed only if DID creation was successful (not in progress, not failed)
         return didStatus === 'created';
       case 'documents':
         return documents.certificateOfIncorporation.file && documents.registryExtract.file;
-      case 'verification':
-        return verificationStatus === 'awaiting-review' || verificationStatus === 'verified';
-      case 'vc-issuance':
-        return vcStatus === 'issued';
+      case 'vc-pending':
+        return vcStatus === 'awaiting-platform' || vcStatus === 'ready-to-accept';
+      case 'vc-accept':
+        return vcStatus === 'accepted';
       default:
         return false;
     }
@@ -164,9 +159,9 @@ export default function OnboardingPage() {
       const targetStep = steps[nextIndex].id;
       setCurrentStep(targetStep);
 
-      // Upload documents to IPFS when reaching verification step
-      if (targetStep === 'verification') {
-        setVerificationStatus('uploading-ipfs');
+      // Upload documents to IPFS and trigger backend credential issuance when reaching vc-pending step
+      if (targetStep === 'vc-pending') {
+        setVcStatus('uploading-docs');
 
         try {
           const certFile = documents.certificateOfIncorporation.file;
@@ -174,7 +169,8 @@ export default function OnboardingPage() {
 
           if (!certFile || !regFile) {
             console.error('[Onboarding] Missing document files');
-            setVerificationStatus('failed');
+            setVcStatus('failed');
+            setVcErrorMessage('Document files are missing');
             return;
           }
 
@@ -188,16 +184,54 @@ export default function OnboardingPage() {
 
           if (!uploadResult.success || !uploadResult.cid) {
             console.error('[Onboarding] IPFS upload failed:', uploadResult.error);
-            setVerificationStatus('failed');
+            setVcStatus('failed');
+            setVcErrorMessage(uploadResult.error || 'Upload failed');
             return;
           }
 
           console.log('[Onboarding] Documents uploaded, CID:', uploadResult.cid);
           setIpfsCid(uploadResult.cid);
-          setVerificationStatus('awaiting-review');
+
+          // Now trigger backend to issue credential
+          console.log('[Onboarding] Issuing credential from backend...');
+          setVcStatus('awaiting-platform');
+
+          // Call backend to issue credential
+          const createResult = await fetch('/api/credential/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userAddress: connectedWalletAddress,
+              companyInfo: {
+                companyName: companyInfo.companyName,
+                registrationNumber: companyInfo.registrationNumber,
+                countryOfIncorporation: companyInfo.countryOfIncorporation,
+                contactEmail: companyInfo.contactEmail,
+              },
+              ipfsCid: uploadResult.cid,
+            }),
+          });
+
+          if (!createResult.ok) {
+            const errorData = await createResult.json();
+            throw new Error(errorData.error || 'Failed to issue credential');
+          }
+
+          const createData = await createResult.json();
+          if (createData.success) {
+            console.log('[Onboarding] Credential created:', createData.credentialId);
+            setCredentialId(createData.credentialId);
+            setCreateTxHash(createData.transactionHash);
+
+            // Credential is ready to accept
+            setVcStatus('ready-to-accept');
+          } else {
+            throw new Error(createData.error || 'Credential creation failed');
+          }
         } catch (error) {
-          console.error('[Onboarding] IPFS upload error:', error);
-          setVerificationStatus('failed');
+          console.error('[Onboarding] Error:', error);
+          setVcStatus('failed');
+          setVcErrorMessage(error instanceof Error ? error.message : 'An error occurred');
         }
       }
     }
@@ -228,6 +262,11 @@ export default function OnboardingPage() {
 
       // Set wallet address
       setConnectedWalletAddress(walletResult.address);
+
+      // Simulate 1-3 second checking/verification delay
+      const delayMs = 1000 + Math.random() * 2000; // 1-3 seconds
+      console.log('[Wallet Connect] Simulating DID check delay:', Math.round(delayMs), 'ms');
+      await new Promise(resolve => setTimeout(resolve, delayMs));
 
       // For demo purposes: Skip DID check and always show "No DID Found"
       // This allows the demo to proceed without testnet connection
@@ -329,9 +368,9 @@ export default function OnboardingPage() {
     }
   };
 
-  const handleIssueVC = async () => {
-    console.log('[Onboarding] Starting credential issuance...');
-    setVcStatus('issuing');
+  const handleAcceptVC = async () => {
+    console.log('[Onboarding] Starting credential acceptance...');
+    setVcStatus('accepting');
     setVcErrorMessage(null);
 
     try {
@@ -339,38 +378,34 @@ export default function OnboardingPage() {
         throw new Error('Wallet address not available');
       }
 
-      if (!ipfsCid) {
-        throw new Error('IPFS CID not available');
-      }
+      console.log('[Onboarding] Accepting credential for wallet:', connectedWalletAddress);
 
-      console.log('[Onboarding] Issuing credential for wallet:', connectedWalletAddress);
-
-      const result = await issueCredential({
-        userAddress: connectedWalletAddress,
-        companyInfo: {
-          companyName: companyInfo.companyName,
-          registrationNumber: companyInfo.registrationNumber,
-          countryOfIncorporation: companyInfo.countryOfIncorporation,
-          contactEmail: companyInfo.contactEmail,
-        },
-        ipfsCid,
+      // Call the credential accept endpoint which will trigger Crossmark
+      const result = await fetch('/api/credential/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userAddress: connectedWalletAddress,
+        }),
       });
 
-      if (!result.success) {
-        throw new Error(result.error || 'Credential issuance failed');
+      if (!result.ok) {
+        const errorData = await result.json();
+        throw new Error(errorData.error || 'Failed to accept credential');
       }
 
-      console.log('[Onboarding] Credential issued successfully');
-      console.log('[Onboarding] Credential ID:', result.credentialId);
-      console.log('[Onboarding] Create TX Hash:', result.createTxHash);
-      console.log('[Onboarding] Accept TX Hash:', result.acceptTxHash);
+      const acceptData = await result.json();
+      if (acceptData.success) {
+        console.log('[Onboarding] Credential accepted successfully');
+        console.log('[Onboarding] Accept TX Hash:', acceptData.transactionHash);
 
-      setVcStatus('issued');
-      setCredentialId(result.credentialId || null);
-      setCreateTxHash(result.createTxHash || null);
-      setAcceptTxHash(result.acceptTxHash || null);
+        setAcceptTxHash(acceptData.transactionHash || null);
+        setVcStatus('accepted');
+      } else {
+        throw new Error(acceptData.error || 'Credential acceptance failed');
+      }
     } catch (error) {
-      console.error('[Onboarding] Credential issuance error:', error);
+      console.error('[Onboarding] Credential acceptance error:', error);
       setVcStatus('failed');
       setVcErrorMessage(error instanceof Error ? error.message : 'Unknown error');
     }
@@ -408,28 +443,27 @@ export default function OnboardingPage() {
             onRemove={handleRemoveFile}
           />
         );
-      case 'verification':
+      case 'vc-pending':
         return (
-          <VerificationStep
+          <VCPendingStep
+            vcStatus={vcStatus}
+            vcErrorMessage={vcErrorMessage}
+            credentialId={credentialId}
+            createTxHash={createTxHash}
             companyInfo={companyInfo}
-            documents={documents}
-            verificationStatus={verificationStatus}
-            ipfsCid={ipfsCid}
-            walletAddress={connectedWalletAddress}
           />
         );
-      case 'vc-issuance':
+      case 'vc-accept':
         return (
-          <VCIssuanceStep
-            companyInfo={companyInfo}
-            ipfsCid={ipfsCid}
+          <VCAcceptStep
             vcStatus={vcStatus}
             vcErrorMessage={vcErrorMessage}
             credentialId={credentialId}
             createTxHash={createTxHash}
             acceptTxHash={acceptTxHash}
             walletAddress={connectedWalletAddress}
-            onIssueVC={handleIssueVC}
+            companyInfo={companyInfo}
+            onAcceptVC={handleAcceptVC}
           />
         );
       default:
@@ -604,7 +638,7 @@ export default function OnboardingPage() {
               Back
             </motion.button>
 
-            {currentStep !== 'vc-issuance' && (
+            {currentStep !== 'vc-accept' && (
               <motion.button
                 onClick={handleNext}
                 disabled={!canProceed()}
@@ -621,7 +655,7 @@ export default function OnboardingPage() {
               </motion.button>
             )}
 
-            {currentStep === 'vc-issuance' && vcStatus === 'issued' && (
+            {currentStep === 'vc-accept' && vcStatus === 'accepted' && (
               <Link href="/dashboard">
                 <motion.button
                   className="flex items-center gap-2 px-8 py-3 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white hover:shadow-glow-md"
@@ -1360,194 +1394,169 @@ function DocumentUpload({
   );
 }
 
-function VerificationStep({
+function VCPendingStep({
+  vcStatus,
+  vcErrorMessage,
+  credentialId,
+  createTxHash,
   companyInfo,
-  documents,
-  verificationStatus,
-  ipfsCid,
-  walletAddress,
 }: {
+  vcStatus: VCStatus;
+  vcErrorMessage: string | null;
+  credentialId: string | null;
+  createTxHash: string | null;
   companyInfo: CompanyInfo;
-  documents: { certificateOfIncorporation: Document; registryExtract: Document };
-  verificationStatus: VerificationStatus;
-  ipfsCid: string | null;
-  walletAddress: string | null;
 }) {
-  const [copied, setCopied] = useState(false);
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   return (
     <div className="card">
       <div className="card-header">
         <div className="flex items-center gap-3">
           <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-            verificationStatus === 'awaiting-review'
-              ? 'bg-gradient-to-br from-accent-amber/20 to-accent-amber/5'
-              : verificationStatus === 'uploading-ipfs'
-              ? 'bg-gradient-to-br from-accent-sky/20 to-accent-sky/5'
+            vcStatus === 'ready-to-accept'
+              ? 'bg-gradient-to-br from-rlusd-primary/30 to-rlusd-primary/10'
               : 'bg-gradient-to-br from-accent-amber/20 to-accent-amber/5'
           }`}>
-            {verificationStatus === 'uploading-ipfs' ? (
-              <Database className="w-6 h-6 text-accent-sky" />
+            {vcStatus === 'ready-to-accept' ? (
+              <CheckCircle2 className="w-6 h-6 text-rlusd-glow" />
             ) : (
-              <Shield className="w-6 h-6 text-accent-amber" />
+              <Clock className="w-6 h-6 text-accent-amber" />
             )}
           </div>
           <div>
-            <h2 className="font-display text-xl font-semibold text-text-primary">Platform Verification</h2>
+            <h2 className="font-display text-xl font-semibold text-text-primary">
+              {vcStatus === 'ready-to-accept' ? 'Credential Ready!' : 'Verification Pending'}
+            </h2>
             <p className="text-sm text-text-muted">
-              {verificationStatus === 'uploading-ipfs'
-                ? 'Generating IPFS metadata for your documents'
-                : verificationStatus === 'awaiting-review'
-                ? 'Submission complete - Pending platform review'
-                : 'Preparing verification submission'}
+              {vcStatus === 'ready-to-accept'
+                ? 'Your credential is ready to accept'
+                : 'Platform is verifying your documents...'}
             </p>
           </div>
         </div>
       </div>
       <div className="card-body space-y-6">
-        {/* Company Summary */}
-        <div className="p-5 rounded-xl bg-maritime-slate/30 border border-white/5">
-          <p className="text-xs uppercase tracking-wider text-text-muted mb-4">Company Details</p>
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <span className="text-text-muted text-xs">Company Name</span>
-              <p className="text-text-primary font-medium">{companyInfo.companyName || 'Not provided'}</p>
-            </div>
-            <div>
-              <span className="text-text-muted text-xs">Registration No.</span>
-              <p className="text-text-primary font-mono">{companyInfo.registrationNumber || 'Not provided'}</p>
-            </div>
-            <div>
-              <span className="text-text-muted text-xs">Country</span>
-              <p className="text-text-primary">{companyInfo.countryOfIncorporation || 'Not provided'}</p>
-            </div>
-            <div>
-              <span className="text-text-muted text-xs">Email</span>
-              <p className="text-text-primary">{companyInfo.contactEmail || 'Not provided'}</p>
-            </div>
+        {vcStatus === 'uploading-docs' && (
+          <div className="flex flex-col items-center py-12">
+            <motion.div
+              className="w-28 h-28 rounded-2xl bg-gradient-to-br from-accent-sky/20 to-accent-sky/5 flex items-center justify-center mb-6"
+              animate={{ scale: [1, 1.05, 1] }}
+              transition={{ duration: 2, repeat: Infinity }}
+            >
+              <Database className="w-14 h-14 text-accent-sky" />
+            </motion.div>
+            <p className="text-xl text-text-primary font-medium mb-2">Uploading Documents</p>
+            <p className="text-sm text-text-muted text-center max-w-md">
+              Securely uploading your KYC documents to IPFS...
+            </p>
           </div>
-        </div>
+        )}
 
-        {/* IPFS Upload Progress */}
-        <div className="p-5 rounded-xl bg-maritime-slate/20 border border-white/5">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
-                ipfsCid ? 'bg-rlusd-primary/20' : 'bg-accent-sky/20'
-              }`}>
-                {ipfsCid ? (
-                  <CheckCircle2 className="w-6 h-6 text-rlusd-glow" />
-                ) : (
-                  <Loader2 className="w-6 h-6 text-accent-sky animate-spin" />
+        {vcStatus === 'awaiting-platform' && (
+          <div className="flex flex-col items-center py-12">
+            <motion.div
+              className="w-28 h-28 rounded-2xl bg-gradient-to-br from-accent-amber/20 to-accent-amber/5 flex items-center justify-center mb-6"
+              animate={{ scale: [1, 1.05, 1] }}
+              transition={{ duration: 2, repeat: Infinity }}
+            >
+              <Clock className="w-14 h-14 text-accent-amber" />
+            </motion.div>
+            <p className="text-xl text-text-primary font-medium mb-2">Platform Verifying</p>
+            <p className="text-sm text-text-muted text-center max-w-md">
+              Our team is reviewing your documents and company information...
+            </p>
+          </div>
+        )}
+
+        {vcStatus === 'ready-to-accept' && (
+          <div className="space-y-6">
+            <motion.div
+              className="flex flex-col items-center py-6"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+            >
+              <motion.div
+                className="w-20 h-20 rounded-2xl bg-gradient-to-br from-rlusd-primary/30 to-rlusd-primary/10 flex items-center justify-center mb-4 shadow-glow-lg"
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 200 }}
+              >
+                <CheckCircle2 className="w-10 h-10 text-rlusd-glow" />
+              </motion.div>
+              <h3 className="text-xl font-display font-semibold text-text-primary">Verified!</h3>
+              <p className="text-sm text-text-secondary mt-1">Your company has been verified</p>
+            </motion.div>
+
+            {/* Credential Details */}
+            <div className="p-5 rounded-xl bg-rlusd-primary/5 border border-rlusd-primary/20">
+              <div className="flex items-center gap-2 mb-4">
+                <Shield className="w-5 h-5 text-rlusd-glow" />
+                <p className="text-sm text-text-primary font-medium">Your Credential</p>
+              </div>
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center justify-between py-2 border-b border-white/5">
+                  <span className="text-text-muted">Company</span>
+                  <span className="text-text-primary font-medium">{companyInfo.companyName}</span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-white/5">
+                  <span className="text-text-muted">Registration</span>
+                  <span className="text-text-primary font-mono">{companyInfo.registrationNumber}</span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-white/5">
+                  <span className="text-text-muted">Type</span>
+                  <span className="text-rlusd-glow">KYC_VERIFIED</span>
+                </div>
+                {credentialId && (
+                  <div className="flex items-center justify-between py-2">
+                    <span className="text-text-muted">Credential ID</span>
+                    <code className="text-xs text-accent-violet font-mono">{credentialId.slice(0, 16)}...</code>
+                  </div>
                 )}
               </div>
-              <div>
-                <p className="text-sm text-text-primary font-medium">IPFS Metadata</p>
-                <p className="text-xs text-text-muted">
-                  {ipfsCid ? 'Successfully uploaded to IPFS' : 'Uploading documents to IPFS...'}
-                </p>
-              </div>
             </div>
-            {ipfsCid && (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-rlusd-primary/20 text-xs text-rlusd-glow">
-                <Check className="w-3 h-3" />
-                Complete
-              </div>
-            )}
-          </div>
 
-          {ipfsCid && (
-            <div className="p-3 rounded-lg bg-maritime-navy/50 border border-white/5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Link2 className="w-4 h-4 text-accent-sky shrink-0" />
-                  <code className="text-xs font-mono text-accent-sky truncate">{ipfsCid}</code>
+            {createTxHash && (
+              <div className="p-4 rounded-xl bg-maritime-slate/30 border border-white/5">
+                <div className="flex items-center gap-2 mb-3">
+                  <Zap className="w-4 h-4 text-rlusd-glow" />
+                  <span className="text-xs text-text-muted">Creation Transaction</span>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <motion.button
-                    onClick={() => copyToClipboard(ipfsCid)}
-                    className="p-2 rounded-md hover:bg-maritime-steel/50 text-text-muted hover:text-text-primary transition-colors"
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
-                  >
-                    {copied ? <Check className="w-4 h-4 text-rlusd-glow" /> : <Copy className="w-4 h-4" />}
-                  </motion.button>
-                  <motion.a
-                    href={`https://ipfs.io/ipfs/${ipfsCid}`}
+                <div className="flex items-center gap-2">
+                  <code className="text-xs font-mono text-rlusd-glow truncate">{createTxHash}</code>
+                  <a
+                    href={`https://testnet.xrpl.org/transactions/${createTxHash}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="p-2 rounded-md hover:bg-maritime-steel/50 text-text-muted hover:text-text-primary transition-colors"
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
+                    className="p-1 rounded hover:bg-maritime-steel/50 text-text-muted hover:text-rlusd-glow transition-colors"
                   >
                     <ExternalLink className="w-4 h-4" />
-                  </motion.a>
+                  </a>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
 
-        {/* Documents Submitted */}
-        <div className="space-y-3">
-          <p className="text-xs uppercase tracking-wider text-text-muted">Documents Submitted</p>
-
-          <div className="flex items-center justify-between p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
-            <div className="flex items-center gap-3">
-              <FileText className="w-5 h-5 text-text-muted" />
-              <span className="text-sm text-text-primary">Certificate of Incorporation</span>
-            </div>
-            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs ${
-              ipfsCid ? 'bg-rlusd-primary/20 text-rlusd-glow' : 'bg-accent-amber/20 text-accent-amber'
-            }`}>
-              {ipfsCid ? <Check className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin" />}
-              {ipfsCid ? 'Verified' : 'Verifying'}
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
-            <div className="flex items-center gap-3">
-              <FileText className="w-5 h-5 text-text-muted" />
-              <span className="text-sm text-text-primary">Registry Extract</span>
-            </div>
-            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs ${
-              ipfsCid ? 'bg-rlusd-primary/20 text-rlusd-glow' : 'bg-accent-amber/20 text-accent-amber'
-            }`}>
-              {ipfsCid ? <Check className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin" />}
-              {ipfsCid ? 'Verified' : 'Verifying'}
-            </div>
-          </div>
-        </div>
-
-        {/* Status Notice */}
-        {verificationStatus === 'awaiting-review' && (
-          <div className="p-4 rounded-xl bg-accent-amber/5 border border-accent-amber/20">
-            <div className="flex items-start gap-3">
-              <Clock className="w-5 h-5 text-accent-amber shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm text-text-primary font-medium">Pending Platform Review</p>
-                <p className="text-xs text-text-muted mt-1">
-                  Your KYC documents have been uploaded to IPFS and are now pending review by the platform.
-                  You can proceed to the DID issuance step, but signing will require platform approval.
-                </p>
+            <div className="p-4 rounded-xl bg-rlusd-primary/5 border border-rlusd-primary/20">
+              <div className="flex items-start gap-3">
+                <FileText className="w-5 h-5 text-rlusd-glow shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-text-primary font-medium">Next: Accept Your Credential</p>
+                  <p className="text-xs text-text-muted mt-1">
+                    Click continue to accept this verification credential on the XRPL and complete your onboarding.
+                  </p>
+                </div>
               </div>
             </div>
           </div>
         )}
 
-        {verificationStatus === 'uploading-ipfs' && (
-          <div className="p-4 rounded-xl bg-accent-sky/5 border border-accent-sky/20">
-            <div className="flex items-center gap-3">
-              <Loader2 className="w-5 h-5 text-accent-sky animate-spin" />
+        {vcStatus === 'failed' && (
+          <div className="p-4 rounded-xl bg-accent-coral/5 border border-accent-coral/20">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-accent-coral shrink-0 mt-0.5" />
               <div>
-                <p className="text-sm text-text-primary">Generating IPFS Metadata</p>
-                <p className="text-xs text-text-muted">Creating immutable record of your verification documents...</p>
+                <p className="text-sm text-text-primary font-medium">Verification Failed</p>
+                <p className="text-xs text-text-muted mt-1">
+                  {vcErrorMessage || 'An error occurred during verification. Please try again.'}
+                </p>
               </div>
             </div>
           </div>
@@ -1557,27 +1566,25 @@ function VerificationStep({
   );
 }
 
-// Step 5: VC Issuance (final step)
-function VCIssuanceStep({
-  companyInfo,
-  ipfsCid,
+// Step 5: Accept Credential (User accepts the credential via Crossmark)
+function VCAcceptStep({
   vcStatus,
   vcErrorMessage,
   credentialId,
   createTxHash,
   acceptTxHash,
   walletAddress,
-  onIssueVC,
+  companyInfo,
+  onAcceptVC,
 }: {
-  companyInfo: CompanyInfo;
-  ipfsCid: string | null;
   vcStatus: VCStatus;
   vcErrorMessage: string | null;
   credentialId: string | null;
   createTxHash: string | null;
   acceptTxHash: string | null;
   walletAddress: string | null;
-  onIssueVC: () => void;
+  companyInfo: CompanyInfo;
+  onAcceptVC: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -1592,15 +1599,15 @@ function VCIssuanceStep({
       <div className="card-header">
         <div className="flex items-center gap-3">
           <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-            vcStatus === 'issued'
+            vcStatus === 'accepted'
               ? 'bg-gradient-to-br from-rlusd-primary/30 to-rlusd-primary/10'
-              : vcStatus === 'issuing'
+              : vcStatus === 'accepting'
               ? 'bg-gradient-to-br from-accent-violet/20 to-accent-violet/5'
               : 'bg-gradient-to-br from-accent-amber/20 to-accent-amber/5'
           }`}>
-            {vcStatus === 'issued' ? (
+            {vcStatus === 'accepted' ? (
               <CheckCircle2 className="w-6 h-6 text-rlusd-glow" />
-            ) : vcStatus === 'issuing' ? (
+            ) : vcStatus === 'accepting' ? (
               <Loader2 className="w-6 h-6 text-accent-violet animate-spin" />
             ) : (
               <Shield className="w-6 h-6 text-accent-amber" />
@@ -1608,78 +1615,65 @@ function VCIssuanceStep({
           </div>
           <div>
             <h2 className="font-display text-xl font-semibold text-text-primary">
-              {vcStatus === 'issued'
-                ? 'Verification Complete!'
-                : vcStatus === 'issuing'
-                ? 'Issuing Credential...'
-                : 'Issue Verification Credential'}
+              {vcStatus === 'accepted'
+                ? 'Onboarding Complete!'
+                : vcStatus === 'accepting'
+                ? 'Accepting Credential...'
+                : 'Accept Verification Credential'}
             </h2>
             <p className="text-sm text-text-muted">
-              {vcStatus === 'issued'
-                ? 'Your verified credential is ready'
-                : vcStatus === 'issuing'
-                ? 'Creating your verification credential'
-                : 'Request your platform verification credential'}
+              {vcStatus === 'accepted'
+                ? 'Your credential has been accepted'
+                : vcStatus === 'accepting'
+                ? 'Signing credential acceptance...'
+                : 'Sign and accept your verification credential'}
             </p>
           </div>
         </div>
       </div>
       <div className="card-body">
-        {vcStatus === 'pending' && (
+        {(vcStatus === 'ready-to-accept' || vcStatus === 'pending') && (
           <div className="space-y-6">
-            {/* DID Summary */}
+            {/* Credential Summary */}
             <div className="p-5 rounded-xl bg-maritime-slate/30 border border-white/5">
-              <p className="text-xs uppercase tracking-wider text-text-muted mb-4">Your DID</p>
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-maritime-navy/50 border border-white/5">
-                <Fingerprint className="w-4 h-4 text-rlusd-primary shrink-0" />
-                <code className="text-xs font-mono text-rlusd-glow truncate">did:xrpl:testnet:{walletAddress}</code>
+              <p className="text-xs uppercase tracking-wider text-text-muted mb-4">Verification Credential</p>
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center justify-between py-2 border-b border-white/5">
+                  <span className="text-text-muted">Company</span>
+                  <span className="text-text-primary font-medium">{companyInfo.companyName}</span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-white/5">
+                  <span className="text-text-muted">Type</span>
+                  <span className="text-rlusd-glow">KYC_VERIFIED</span>
+                </div>
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-text-muted">Status</span>
+                  <span className="flex items-center gap-1 text-accent-amber">
+                    <Clock className="w-3 h-3" />
+                    Pending Acceptance
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Company Summary */}
-            <div className="p-5 rounded-xl bg-maritime-slate/30 border border-white/5">
-              <p className="text-xs uppercase tracking-wider text-text-muted mb-4">Verified Company</p>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="text-text-muted text-xs">Company Name</span>
-                  <p className="text-text-primary font-medium">{companyInfo.companyName}</p>
-                </div>
-                <div>
-                  <span className="text-text-muted text-xs">Registration</span>
-                  <p className="text-text-primary font-mono">{companyInfo.registrationNumber}</p>
-                </div>
-              </div>
-            </div>
-
-            {/* IPFS CID */}
-            {ipfsCid && (
-              <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
-                <div className="flex items-center gap-2 mb-2">
-                  <Link2 className="w-4 h-4 text-accent-sky" />
-                  <span className="text-xs text-text-muted">Verified Documents (IPFS)</span>
-                </div>
-                <code className="text-xs font-mono text-accent-sky">{ipfsCid}</code>
-              </div>
-            )}
-
-            {/* Issue Button */}
+            {/* Accept Button */}
             <motion.button
-              onClick={onIssueVC}
+              onClick={onAcceptVC}
               className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white font-medium hover:shadow-glow-md transition-all"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
             >
               <Shield className="w-5 h-5" />
-              Issue Verification Credential
+              Accept Credential on XRPL
             </motion.button>
 
             <p className="text-xs text-text-muted text-center">
-              This will create a verifiable credential attesting to your company&apos;s KYC verification.
+              Sign this credential acceptance with Crossmark to complete your onboarding.
             </p>
           </div>
         )}
 
-        {vcStatus === 'issuing' && (
+        {vcStatus === 'accepting' && (
           <div className="flex flex-col items-center py-12">
             <motion.div
               className="w-28 h-28 rounded-2xl bg-gradient-to-br from-accent-violet/20 to-accent-violet/5 flex items-center justify-center mb-6"
@@ -1688,13 +1682,13 @@ function VCIssuanceStep({
             >
               <Shield className="w-14 h-14 text-accent-violet" />
             </motion.div>
-            <p className="text-xl text-text-primary font-medium mb-2">Issuing Credential</p>
+            <p className="text-xl text-text-primary font-medium mb-2">Accepting Credential</p>
             <p className="text-sm text-text-muted text-center max-w-md">
-              Creating CredentialCreate transaction on XRPL...
+              Signing CredentialAccept transaction on XRPL...
             </p>
             <div className="mt-6 flex items-center gap-2">
               <Loader2 className="w-5 h-5 text-accent-violet animate-spin" />
-              <span className="text-sm text-text-muted">Crossmark will prompt you to sign the CredentialAccept transaction...</span>
+              <span className="text-sm text-text-muted">Confirm in Crossmark wallet...</span>
             </div>
           </div>
         )}
@@ -1705,26 +1699,26 @@ function VCIssuanceStep({
               <div className="flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-accent-coral shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-sm text-text-primary font-medium">Credential Issuance Failed</p>
+                  <p className="text-sm text-text-primary font-medium">Credential Acceptance Failed</p>
                   <p className="text-xs text-text-muted mt-1">
-                    {vcErrorMessage || 'An error occurred while issuing your credential. Please try again.'}
+                    {vcErrorMessage || 'An error occurred while accepting your credential. Please try again.'}
                   </p>
                 </div>
               </div>
             </div>
             <motion.button
-              onClick={onIssueVC}
+              onClick={onAcceptVC}
               className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white font-medium hover:shadow-glow-md transition-all"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
             >
               <Shield className="w-5 h-5" />
-              Retry Credential Issuance
+              Retry Credential Acceptance
             </motion.button>
           </div>
         )}
 
-        {vcStatus === 'issued' && (
+        {vcStatus === 'accepted' && (
           <div className="space-y-6">
             <motion.div
               className="flex flex-col items-center py-8"
@@ -1789,8 +1783,8 @@ function VCIssuanceStep({
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-2">
-                  <span className="text-text-muted">IPFS CID</span>
-                  <code className="text-xs text-accent-sky font-mono truncate max-w-[180px]">{ipfsCid || 'N/A'}</code>
+                  <span className="text-text-muted">Verified On</span>
+                  <span className="text-xs text-rlusd-glow">XRPL Testnet</span>
                 </div>
               </div>
             </div>
