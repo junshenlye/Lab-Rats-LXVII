@@ -2,8 +2,9 @@
  * DID Creation API Endpoint
  * Builds the DIDSet transaction for signing with Crossmark wallet in the browser
  *
- * NOTE: Transaction autofill (adding Sequence/LastLedgerSequence) happens on the browser side
- * because WebSocket connectivity works better from the browser than from Next.js server.
+ * IMPORTANT: Returns a "naked" transaction for Crossmark!
+ * Crossmark is a smart wallet - it handles Fee, Sequence, LastLedgerSequence automatically.
+ * Do NOT include these fields in the transaction.
  */
 
 import {
@@ -30,7 +31,8 @@ interface CreateDIDResponse {
     TransactionType: string;
     Account: string;
     URI?: string;
-    Fee: string;
+    Data?: string;
+    // NO Fee, Sequence, LastLedgerSequence - Crossmark handles these
   };
   error?: string;
 }
@@ -91,24 +93,30 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    console.log('[DID Create API] Built DIDSet transaction:', transaction);
-    console.log('[DID Create API] Transaction will be autofilled on the browser side');
+    console.log('[DID Create API] Built DIDSet transaction');
 
-    // Return the unsigned transaction to the browser
-    // The browser will autofill it with Sequence/LastLedgerSequence before signing
+    // Return the NAKED transaction to the browser
+    // Crossmark is a smart wallet - NO Fee, Sequence, LastLedgerSequence needed!
     const did = formatDID(body.walletAddress);
+
+    // Build naked transaction for Crossmark
+    const nakedTransaction: CreateDIDResponse['transaction'] = {
+      TransactionType: transaction.TransactionType,
+      Account: transaction.Account,
+    };
+
+    // Only include URI if present
+    if (transaction.URI) {
+      nakedTransaction.URI = transaction.URI;
+    }
+
+    console.log('[DID Create API] Naked transaction for Crossmark:', nakedTransaction);
 
     return Response.json(
       {
         success: true,
         did,
-        transaction: {
-          TransactionType: transaction.TransactionType,
-          Account: transaction.Account,
-          URI: transaction.URI,
-          Fee: transaction.Fee,
-          // Sequence and LastLedgerSequence will be added by the browser via autofill()
-        },
+        transaction: nakedTransaction,
       } as CreateDIDResponse,
       { status: 200 }
     );

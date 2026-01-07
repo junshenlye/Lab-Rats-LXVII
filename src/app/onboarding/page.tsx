@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { connectCrossmarkWallet } from '@/lib/wallet';
 import { checkDidOnTestnet, createDID } from '@/lib/did';
+import { issueCredential, uploadDocuments } from '@/lib/credential';
 import {
   Building2,
   FileText,
@@ -47,7 +48,7 @@ type DIDStatus =
   | 'created'            // Success
   | 'failed'             // General failure
   | 'testnet_error';     // Network issue
-type VCStatus = 'pending' | 'issuing' | 'issued' | 'failed';
+type VCStatus = 'pending' | 'issuing' | 'accepting' | 'issued' | 'failed';
 
 interface CompanyInfo {
   companyName: string;
@@ -97,6 +98,10 @@ export default function OnboardingPage() {
   const [didTransactionHash, setDidTransactionHash] = useState<string | null>(null);
   const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>('pending');
   const [vcStatus, setVcStatus] = useState<VCStatus>('pending');
+  const [vcErrorMessage, setVcErrorMessage] = useState<string | null>(null);
+  const [credentialId, setCredentialId] = useState<string | null>(null);
+  const [createTxHash, setCreateTxHash] = useState<string | null>(null);
+  const [acceptTxHash, setAcceptTxHash] = useState<string | null>(null);
   const [ipfsCid, setIpfsCid] = useState<string | null>(null);
 
   const currentStepIndex = steps.findIndex(s => s.id === currentStep);
@@ -153,19 +158,47 @@ export default function OnboardingPage() {
     }
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     const nextIndex = currentStepIndex + 1;
     if (nextIndex < steps.length) {
       const targetStep = steps[nextIndex].id;
       setCurrentStep(targetStep);
 
-      // Simulate IPFS upload when reaching verification step
+      // Upload documents to IPFS when reaching verification step
       if (targetStep === 'verification') {
         setVerificationStatus('uploading-ipfs');
-        setTimeout(() => {
-          setIpfsCid('QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco');
+
+        try {
+          const certFile = documents.certificateOfIncorporation.file;
+          const regFile = documents.registryExtract.file;
+
+          if (!certFile || !regFile) {
+            console.error('[Onboarding] Missing document files');
+            setVerificationStatus('failed');
+            return;
+          }
+
+          console.log('[Onboarding] Uploading documents to IPFS...');
+          const uploadResult = await uploadDocuments(certFile, regFile, {
+            companyName: companyInfo.companyName,
+            registrationNumber: companyInfo.registrationNumber,
+            countryOfIncorporation: companyInfo.countryOfIncorporation,
+            contactEmail: companyInfo.contactEmail,
+          });
+
+          if (!uploadResult.success || !uploadResult.cid) {
+            console.error('[Onboarding] IPFS upload failed:', uploadResult.error);
+            setVerificationStatus('failed');
+            return;
+          }
+
+          console.log('[Onboarding] Documents uploaded, CID:', uploadResult.cid);
+          setIpfsCid(uploadResult.cid);
           setVerificationStatus('awaiting-review');
-        }, 2000);
+        } catch (error) {
+          console.error('[Onboarding] IPFS upload error:', error);
+          setVerificationStatus('failed');
+        }
       }
     }
   };
@@ -196,26 +229,27 @@ export default function OnboardingPage() {
       // Set wallet address
       setConnectedWalletAddress(walletResult.address);
 
-      // Check if DID exists on testnet (now using API proxy to avoid CORS)
+      // For demo purposes: Skip DID check and always show "No DID Found"
+      // This allows the demo to proceed without testnet connection
+      console.log('[Demo Mode] Skipping DID check, setting to not-found');
+      setDidStatus('not-found');
+      setDidErrorMessage(null);
+
+      // Uncomment below to enable real DID checking:
+      /*
       const didResult = await checkDidOnTestnet(walletResult.address);
 
-      if (didResult.error === 'testnet_unreachable') {
-        // Testnet is down - this is an error state requiring retry
-        setDidStatus('testnet_error');
-        setDidErrorMessage(didResult.errorMessage || 'XRPL testnet is unreachable');
-      } else if (didResult.error === 'did_not_found') {
-        // DID doesn't exist on testnet - this is normal, user can create one
-        setDidStatus('not-found');
-        setDidErrorMessage(null); // Clear error message for normal flow
-      } else if (didResult.exists) {
-        // DID already exists
+      if (didResult.exists) {
         setDidStatus('found');
-        setDidErrorMessage(null); // Clear error message
+        setDidErrorMessage(null);
+      } else if (didResult.error === 'testnet_unreachable') {
+        setDidStatus('testnet_error');
+        setDidErrorMessage(didResult.errorMessage || 'XRPL testnet is unreachable. Please try again.');
       } else {
-        // Unknown error - treat as non-blocking (allow user to proceed)
         setDidStatus('not-found');
         setDidErrorMessage(null);
       }
+      */
     } catch (error) {
       // If wallet connection itself fails, show error
       setConnectedWalletAddress(null);
@@ -295,12 +329,51 @@ export default function OnboardingPage() {
     }
   };
 
-  const handleIssueVC = () => {
+  const handleIssueVC = async () => {
+    console.log('[Onboarding] Starting credential issuance...');
     setVcStatus('issuing');
-    // Simulate VC issuance
-    setTimeout(() => {
+    setVcErrorMessage(null);
+
+    try {
+      if (!connectedWalletAddress) {
+        throw new Error('Wallet address not available');
+      }
+
+      if (!ipfsCid) {
+        throw new Error('IPFS CID not available');
+      }
+
+      console.log('[Onboarding] Issuing credential for wallet:', connectedWalletAddress);
+
+      const result = await issueCredential({
+        userAddress: connectedWalletAddress,
+        companyInfo: {
+          companyName: companyInfo.companyName,
+          registrationNumber: companyInfo.registrationNumber,
+          countryOfIncorporation: companyInfo.countryOfIncorporation,
+          contactEmail: companyInfo.contactEmail,
+        },
+        ipfsCid,
+      });
+
+      if (!result.success) {
+        throw new Error(result.error || 'Credential issuance failed');
+      }
+
+      console.log('[Onboarding] Credential issued successfully');
+      console.log('[Onboarding] Credential ID:', result.credentialId);
+      console.log('[Onboarding] Create TX Hash:', result.createTxHash);
+      console.log('[Onboarding] Accept TX Hash:', result.acceptTxHash);
+
       setVcStatus('issued');
-    }, 1500);
+      setCredentialId(result.credentialId || null);
+      setCreateTxHash(result.createTxHash || null);
+      setAcceptTxHash(result.acceptTxHash || null);
+    } catch (error) {
+      console.error('[Onboarding] Credential issuance error:', error);
+      setVcStatus('failed');
+      setVcErrorMessage(error instanceof Error ? error.message : 'Unknown error');
+    }
   };
 
   const renderStepContent = () => {
@@ -351,6 +424,11 @@ export default function OnboardingPage() {
             companyInfo={companyInfo}
             ipfsCid={ipfsCid}
             vcStatus={vcStatus}
+            vcErrorMessage={vcErrorMessage}
+            credentialId={credentialId}
+            createTxHash={createTxHash}
+            acceptTxHash={acceptTxHash}
+            walletAddress={connectedWalletAddress}
             onIssueVC={handleIssueVC}
           />
         );
@@ -1484,11 +1562,21 @@ function VCIssuanceStep({
   companyInfo,
   ipfsCid,
   vcStatus,
+  vcErrorMessage,
+  credentialId,
+  createTxHash,
+  acceptTxHash,
+  walletAddress,
   onIssueVC,
 }: {
   companyInfo: CompanyInfo;
   ipfsCid: string | null;
   vcStatus: VCStatus;
+  vcErrorMessage: string | null;
+  credentialId: string | null;
+  createTxHash: string | null;
+  acceptTxHash: string | null;
+  walletAddress: string | null;
   onIssueVC: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -1544,7 +1632,7 @@ function VCIssuanceStep({
               <p className="text-xs uppercase tracking-wider text-text-muted mb-4">Your DID</p>
               <div className="flex items-center gap-2 p-3 rounded-lg bg-maritime-navy/50 border border-white/5">
                 <Fingerprint className="w-4 h-4 text-rlusd-primary shrink-0" />
-                <code className="text-xs font-mono text-rlusd-glow truncate">did:xrpl:1:rXxxxxxxxxxxxxxxxxxxxxxxxxxx</code>
+                <code className="text-xs font-mono text-rlusd-glow truncate">did:xrpl:testnet:{walletAddress}</code>
               </div>
             </div>
 
@@ -1602,12 +1690,37 @@ function VCIssuanceStep({
             </motion.div>
             <p className="text-xl text-text-primary font-medium mb-2">Issuing Credential</p>
             <p className="text-sm text-text-muted text-center max-w-md">
-              Creating your verification credential on the platform...
+              Creating CredentialCreate transaction on XRPL...
             </p>
             <div className="mt-6 flex items-center gap-2">
               <Loader2 className="w-5 h-5 text-accent-violet animate-spin" />
-              <span className="text-sm text-text-muted">Please wait...</span>
+              <span className="text-sm text-text-muted">Crossmark will prompt you to sign the CredentialAccept transaction...</span>
             </div>
+          </div>
+        )}
+
+        {vcStatus === 'failed' && (
+          <div className="space-y-6">
+            <div className="p-4 rounded-xl bg-accent-coral/5 border border-accent-coral/20">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-accent-coral shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-text-primary font-medium">Credential Issuance Failed</p>
+                  <p className="text-xs text-text-muted mt-1">
+                    {vcErrorMessage || 'An error occurred while issuing your credential. Please try again.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <motion.button
+              onClick={onIssueVC}
+              className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white font-medium hover:shadow-glow-md transition-all"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <Shield className="w-5 h-5" />
+              Retry Credential Issuance
+            </motion.button>
           </div>
         )}
 
@@ -1628,7 +1741,7 @@ function VCIssuanceStep({
                 <CheckCircle2 className="w-12 h-12 text-rlusd-glow" />
               </motion.div>
               <h3 className="text-2xl font-display font-semibold text-text-primary">Onboarding Complete!</h3>
-              <p className="text-text-secondary mt-2">Your verification credential has been issued</p>
+              <p className="text-text-secondary mt-2">Your KYC_VERIFIED credential has been issued on XRPL</p>
             </motion.div>
 
             {/* DID Display */}
@@ -1637,10 +1750,10 @@ function VCIssuanceStep({
               <div className="flex items-center justify-between gap-2 p-4 rounded-lg bg-maritime-navy/50 border border-white/5">
                 <div className="flex items-center gap-3 min-w-0">
                   <Fingerprint className="w-5 h-5 text-rlusd-primary shrink-0" />
-                  <code className="text-sm font-mono text-rlusd-glow truncate">did:xrpl:1:rXxxxxxxxxxxxxxxxxxxxxxxxxxx</code>
+                  <code className="text-sm font-mono text-rlusd-glow truncate">did:xrpl:testnet:{walletAddress}</code>
                 </div>
                 <motion.button
-                  onClick={() => copyToClipboard('did:xrpl:1:rXxxxxxxxxxxxxxxxxxxxxxxxxxx')}
+                  onClick={() => copyToClipboard(`did:xrpl:testnet:${walletAddress}`)}
                   className="p-2 rounded-lg hover:bg-maritime-steel/50 text-text-muted hover:text-text-primary transition-colors shrink-0"
                   whileHover={{ scale: 1.1 }}
                   whileTap={{ scale: 0.9 }}
@@ -1653,16 +1766,16 @@ function VCIssuanceStep({
             <div className="p-5 rounded-xl bg-accent-violet/5 border border-accent-violet/20">
               <div className="flex items-center gap-2 mb-4">
                 <Shield className="w-5 h-5 text-accent-violet" />
-                <p className="text-sm text-text-primary font-medium">Verification Credential</p>
+                <p className="text-sm text-text-primary font-medium">KYC Verification Credential (XLS-70)</p>
               </div>
               <div className="space-y-3 text-sm">
                 <div className="flex items-center justify-between py-2 border-b border-white/5">
                   <span className="text-text-muted">Credential ID</span>
-                  <code className="text-xs text-accent-violet font-mono">VC-20240107-001</code>
+                  <code className="text-xs text-accent-violet font-mono">{credentialId || 'N/A'}</code>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b border-white/5">
                   <span className="text-text-muted">Type</span>
-                  <span className="text-text-primary">ShipownerVerification</span>
+                  <span className="text-text-primary">KYC_VERIFIED</span>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b border-white/5">
                   <span className="text-text-muted">Issuer</span>
@@ -1672,15 +1785,59 @@ function VCIssuanceStep({
                   <span className="text-text-muted">Status</span>
                   <span className="flex items-center gap-1 text-green-400">
                     <CheckCircle2 className="w-3 h-3" />
-                    Active
+                    Active (On-Chain)
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-2">
-                  <span className="text-text-muted">Expires</span>
-                  <span className="text-text-primary">{new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toLocaleDateString()}</span>
+                  <span className="text-text-muted">IPFS CID</span>
+                  <code className="text-xs text-accent-sky font-mono truncate max-w-[180px]">{ipfsCid || 'N/A'}</code>
                 </div>
               </div>
             </div>
+
+            {/* Transaction Hashes */}
+            {(createTxHash || acceptTxHash) && (
+              <div className="p-5 rounded-xl bg-rlusd-glow/5 border border-rlusd-glow/20">
+                <div className="flex items-center gap-2 mb-4">
+                  <Zap className="w-5 h-5 text-rlusd-glow" />
+                  <p className="text-sm text-text-primary font-medium">XRPL Transactions</p>
+                </div>
+                <div className="space-y-4">
+                  {createTxHash && (
+                    <div>
+                      <p className="text-xs text-text-muted mb-2">CredentialCreate (Issuer signed)</p>
+                      <div className="flex items-center gap-2">
+                        <code className="text-xs font-mono text-rlusd-glow truncate flex-1">{createTxHash}</code>
+                        <a
+                          href={`https://testnet.xrpl.org/transactions/${createTxHash}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-2 rounded-lg hover:bg-maritime-steel/50 text-text-muted hover:text-rlusd-glow transition-colors shrink-0"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                  {acceptTxHash && (
+                    <div>
+                      <p className="text-xs text-text-muted mb-2">CredentialAccept (You signed)</p>
+                      <div className="flex items-center gap-2">
+                        <code className="text-xs font-mono text-rlusd-glow truncate flex-1">{acceptTxHash}</code>
+                        <a
+                          href={`https://testnet.xrpl.org/transactions/${acceptTxHash}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-2 rounded-lg hover:bg-maritime-steel/50 text-text-muted hover:text-rlusd-glow transition-colors shrink-0"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="p-5 rounded-xl bg-rlusd-primary/5 border border-rlusd-primary/20">
               <div className="flex items-start gap-3">

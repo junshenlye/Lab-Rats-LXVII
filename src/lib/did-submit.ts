@@ -1,15 +1,17 @@
 /**
  * DID Transaction Submission with Crossmark Wallet
- * Signs DIDSet transactions using Crossmark wallet and submits to XRPL testnet
+ * Uses Crossmark's signAndSubmit for automatic handling of sequence/fees
+ *
+ * IMPORTANT: Crossmark is a smart wallet - send "naked" transactions only!
+ * Do NOT include: Sequence, Fee, LastLedgerSequence, NetworkID
+ * Crossmark will handle all of these automatically.
  */
-
-import { Client } from 'xrpl';
 
 interface DIDSetTransaction {
   TransactionType: string;
   Account: string;
   URI?: string;
-  Fee: string;
+  Data?: string;
 }
 
 interface SubmitDIDResult {
@@ -20,11 +22,65 @@ interface SubmitDIDResult {
 }
 
 /**
- * Sign a DIDSet transaction with Crossmark wallet and submit to XRPL testnet
- * 1. Requests Crossmark to sign the transaction
- * 2. Submits the signed transaction to XRPL testnet using xrpl Client
- * 3. Waits for confirmation and returns the transaction hash
- * @param transaction - The unsigned DIDSet transaction
+ * Verifies a transaction's status on the XRPL by its hash by calling the local proxy API.
+ * @param txHash The hash of the transaction to verify.
+ * @returns A promise that resolves to an object with the status ('success', 'failed', 'pending') and the result data.
+ */
+async function verifyTransactionOnChain(
+  txHash: string
+): Promise<{ status: 'success' | 'failed' | 'pending'; result?: any }> {
+  try {
+    const response = await fetch('/api/xrpl', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'tx',
+        params: [{ transaction: txHash, binary: false }],
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn(`[DID Verify] Proxy request failed with status ${response.status}. Assuming pending.`);
+      return { status: 'pending' };
+    }
+
+    const data = await response.json();
+
+    // Specific errors that mean the transaction is not yet found/validated
+    if (data.result?.error === 'txnNotFound' || data.error === 'txnNotFound') {
+      console.log(`[DID Verify] Transaction ${txHash} not found on ledger yet.`);
+      return { status: 'pending' };
+    }
+
+    if (!data.result || !data.result.validated) {
+      console.log(`[DID Verify] Transaction ${txHash} found but not yet validated.`);
+      return { status: 'pending' };
+    }
+
+    // We have a validated transaction, let's check the result
+    const txResult = data.result.meta?.TransactionResult;
+    console.log(`[DID Verify] On-chain result for ${txHash}: ${txResult}`);
+
+    if (txResult === 'tesSUCCESS') {
+      return { status: 'success', result: data.result };
+    } else {
+      console.error(`[DID Verify] On-chain transaction failed with result: ${txResult}`);
+      return { status: 'failed', result: data.result };
+    }
+  } catch (error) {
+    console.error('[DID Verify] Exception during transaction verification:', error);
+    // Treat exceptions as 'pending' to allow for retries
+    return { status: 'pending' };
+  }
+}
+
+/**
+ * Sign and submit a DIDSet transaction with Crossmark wallet.
+ * This function first attempts to submit the transaction using `signAndSubmit`.
+ * If the result isn't immediately confirmed, it polls the ledger for 10 seconds
+ * to manually verify the transaction's inclusion and success.
+ *
+ * @param transaction - The "naked" DIDSet transaction (no Sequence/Fee/etc)
  * @param did - The formatted DID string
  * @returns Result with transaction hash or error
  */
@@ -32,15 +88,10 @@ export async function signAndSubmitDIDWithCrossmark(
   transaction: DIDSetTransaction,
   did: string
 ): Promise<SubmitDIDResult> {
-  let client: Client | null = null;
-
   try {
-    // Check if Crossmark SDK is available
+    // Check if running in browser
     if (typeof window === 'undefined') {
-      return {
-        success: false,
-        error: 'Crossmark signing is only available in browser environment',
-      };
+      return { success: false, error: 'Crossmark signing is only available in browser environment' };
     }
 
     // Import Crossmark SDK
@@ -48,190 +99,82 @@ export async function signAndSubmitDIDWithCrossmark(
 
     // Verify Crossmark is connected
     if (!sdk.session?.address) {
-      return {
-        success: false,
-        error: 'Crossmark wallet not connected. Please connect your wallet first.',
-      };
+      return { success: false, error: 'Crossmark wallet not connected. Please connect your wallet first.' };
     }
 
-    console.log('[DID Submit] Preparing DIDSet transaction for signing:', transaction);
-
-    // Cast transaction to any to access autofilled fields
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const txWithFields = transaction as any;
-
-    // Validate that transaction has required fields before sending to Crossmark
-    if (!txWithFields.Sequence) {
-      console.error('[DID Submit] ERROR: Transaction missing Sequence field!');
-      return {
-        success: false,
-        error: 'Transaction missing required Sequence field. Please try again.',
-      };
-    }
-
-    if (!txWithFields.LastLedgerSequence) {
-      console.error('[DID Submit] ERROR: Transaction missing LastLedgerSequence field!');
-      return {
-        success: false,
-        error: 'Transaction missing required LastLedgerSequence field. Please try again.',
-      };
-    }
-
-    // Prepare the transaction for Crossmark to sign
-    // Include all fields - Crossmark needs the complete transaction to sign
-    // Cast to any because Crossmark SDK expects specific transaction types
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const txRequest: any = {
-      TransactionType: transaction.TransactionType as 'DIDSet',
+    console.log('[DID Submit] Preparing naked DIDSet transaction for Crossmark');
+    const nakedTx: any = {
+      TransactionType: 'DIDSet',
       Account: transaction.Account,
-      URI: transaction.URI,
-      Fee: transaction.Fee,
-      Sequence: txWithFields.Sequence,
-      LastLedgerSequence: txWithFields.LastLedgerSequence,
-      SigningPubKey: txWithFields.SigningPubKey || '',
     };
+    if (transaction.URI) nakedTx.URI = transaction.URI;
+    if (transaction.Data) nakedTx.Data = transaction.Data;
 
-    console.log('[DID Submit] Full transaction to sign:', txRequest);
-    console.log('[DID Submit] Requesting Crossmark to sign transaction...');
-
-    // Request Crossmark to sign the transaction
-    // Use sdk.async.signAndWait() which is the correct Crossmark SDK method for signing transactions
+    // 1. Use sdk.async.signAndSubmitAndWait() - Crossmark SDK pattern
+    // Returns: { request, response, createdAt, resolvedAt }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const signResponse = await (sdk.async.signAndWait(txRequest) as any);
+    const { request, response, createdAt, resolvedAt } = await (sdk.async.signAndSubmitAndWait(nakedTx) as any);
 
-    console.log('[DID Submit] Crossmark sign response received:', signResponse);
+    // 2. Log confirmation that the promise has resolved
+    console.log('[DID Submit] Crossmark response:', { request, response, createdAt, resolvedAt });
 
-    if (!signResponse) {
-      console.error('[DID Submit] ERROR: No response from Crossmark!');
-      return {
-        success: false,
-        error: 'Crossmark did not respond. Please try again.',
-      };
-    }
-
-    // Handle different response structures from Crossmark SDK
-    // The response contains a tx_blob (the signed transaction in binary format)
+    // 3. Explicitly check for immediate success, as requested
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const signedTxBlob = (signResponse as any).tx_blob ||
-                         (signResponse as any).signedTransaction ||
-                         (signResponse as any).blob;
-
-    if (!signedTxBlob) {
-      console.error('[DID Submit] ERROR: Crossmark response missing signed transaction:', signResponse);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const errorMsg = (signResponse as any).error || (signResponse as any).message || 'Crossmark failed to sign the transaction. Please try again.';
-      return {
-        success: false,
-        error: errorMsg,
-      };
-    }
-
-    console.log('[DID Submit] Transaction signed successfully');
-    console.log('[DID Submit] Signed transaction blob length:', signedTxBlob.length);
-
-    // The signed transaction blob is ready for submission
-    // We'll submit it directly to XRPL
-
-    console.log('[DID Submit] ✓ Transaction ready for submission');
-
-    // Now submit the signed transaction to XRPL testnet
-    console.log('[DID Submit] Connecting to XRPL testnet for submission...');
-    client = new Client('wss://s.altnet.rippletest.net:51234');
-    await client.connect();
-    console.log('[DID Submit] ✓ Connected to XRPL testnet');
-
-    console.log('[DID Submit] Submitting signed transaction blob to ledger...');
-
-    // Submit the signed transaction blob and wait for confirmation
-    // The blob is the hex-encoded signed transaction from Crossmark
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await client.submitAndWait(signedTxBlob);
-
-    console.log('[DID Submit] Full transaction result:', result);
-    console.log('[DID Submit] Transaction result object:', result.result);
-
-    // Check if transaction was successful
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const txResult = result.result as any;
-    const transactionResult = txResult.meta?.TransactionResult;
-    const txHash = txResult.hash;
-
-    console.log('[DID Submit] Transaction hash:', txHash);
-    console.log('[DID Submit] Transaction result code:', transactionResult);
-
-    if (transactionResult === 'tesSUCCESS') {
-      if (!txHash) {
-        console.error('[DID Submit] ERROR: Transaction confirmed but no hash returned');
-        return {
-          success: false,
-          error: 'Transaction confirmed but no hash returned',
-        };
-      }
-
-      console.log('[DID Submit] ✓✓✓ DIDSet transaction submitted successfully!');
-      console.log('[DID Submit] Transaction hash:', txHash);
-      console.log('[DID Submit] DID:', did);
-
+    const initialResult = (response as any)?.result?.meta?.TransactionResult;
+    if (initialResult === 'tesSUCCESS') {
+      console.log('[DID Submit] ✓ Transaction confirmed immediately in signAndSubmit response.');
       return {
         success: true,
-        transactionHash: txHash,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        transactionHash: (response as any).result.hash,
         did,
       };
-    } else {
-      console.error('[DID Submit] ERROR: Transaction failed on ledger');
-      console.error('[DID Submit] Failure reason:', transactionResult);
-      console.error('[DID Submit] Full result:', txResult);
-
-      return {
-        success: false,
-        error: `Transaction failed on ledger: ${transactionResult || 'Unknown error'}`,
-      };
     }
+
+    // Extract the transaction hash for polling
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const txHash = (response as any)?.result?.hash;
+    if (!txHash) {
+      throw new Error('Could not extract transaction hash from Crossmark response.');
+    }
+
+    // 4. Fallback: Manual polling for up to 10 seconds
+    console.log(`[DID Submit] Initiating 10-second manual verification for hash: ${txHash}`);
+    const startTime = Date.now();
+    while (Date.now() - startTime < 10000) {
+      const { status, result } = await verifyTransactionOnChain(txHash);
+
+      if (status === 'success') {
+        console.log('[DID Submit] ✓ Manual on-chain verification successful.');
+        return { success: true, transactionHash: txHash, did };
+      }
+      if (status === 'failed') {
+        const failureReason = result?.meta?.TransactionResult || 'Unknown on-chain failure';
+        throw new Error(`Transaction failed on-chain with status: ${failureReason}`);
+      }
+      // If status is 'pending', wait for 2 seconds before the next check
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    // 5. If the loop completes, the transaction has timed out
+    throw new Error(`Transaction confirmation timed out after 10 seconds for hash: ${txHash}`);
   } catch (error) {
-    console.error('[DID Submit] EXCEPTION ERROR:', error);
+    console.error('[DID Submit] Final exception:', error);
 
-    // Distinguish between different error types
     let errorMessage = 'Failed to submit DID transaction';
-
     if (error instanceof Error) {
-      console.error('[DID Submit] Error name:', error.name);
-      console.error('[DID Submit] Error message:', error.message);
-
       if (
         error.message.includes('cancelled') ||
         error.message.includes('rejected') ||
-        error.message.includes('Cancelled')
+        error.message.includes('Cancelled') ||
+        error.message.includes('denied')
       ) {
-        console.log('[DID Submit] User cancelled transaction in Crossmark');
-        errorMessage = 'You cancelled the transaction in Crossmark. Please try again.';
-      } else if (error.message.includes('timeout')) {
-        console.log('[DID Submit] Transaction timed out');
-        errorMessage = 'Transaction submission timed out. Please try again.';
-      } else if (error.message.includes('network') || error.message.includes('connection')) {
-        console.log('[DID Submit] Network connection error');
-        errorMessage = 'Network error. Please check your connection and try again.';
-      } else if (error.message.includes('not found') || error.message.includes('No such account')) {
-        console.log('[DID Submit] Account not found on ledger');
-        errorMessage = 'Wallet account not found on XRPL testnet. Please check your wallet address.';
+        errorMessage = 'You cancelled the transaction in Crossmark.';
       } else {
-        console.log('[DID Submit] Other error:', error.message);
         errorMessage = error.message;
       }
     }
 
-    console.error('[DID Submit] Returning error:', errorMessage);
-    return {
-      success: false,
-      error: errorMessage,
-    };
-  } finally {
-    // Always disconnect the client
-    if (client) {
-      try {
-        await client.disconnect();
-      } catch (err) {
-        console.error('[DID Submit] Error disconnecting client:', err);
-      }
-    }
+    return { success: false, error: errorMessage };
   }
 }
