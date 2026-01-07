@@ -76,10 +76,6 @@ export default function OnboardingPage() {
     certificateOfIncorporation: { name: 'Certificate of Incorporation', file: null, status: 'not-uploaded' },
     registryExtract: { name: 'Registry Extract', file: null, status: 'not-uploaded' },
   });
-  const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>('pending');
-  const [ipfsCid, setIpfsCid] = useState<string | null>(null);
-
-  // UI state management
   const [connectedWalletAddress, setConnectedWalletAddress] = useState<string | null>(null);
   const [isConnectingWallet, setIsConnectingWallet] = useState(false);
   const [didStatus, setDidStatus] = useState<DIDStatus>('pending');
@@ -124,14 +120,14 @@ export default function OnboardingPage() {
         // Can proceed if wallet connected and DID check is not running and no network failure
         return connectedWalletAddress !== null && didStatus !== 'checking' && didStatus !== 'failed';
       case 'did-company-info':
-        // Can proceed if DID exists (either pre-existing or just created)
-        return activeDID !== null;
+        // Can proceed if DID creation was successful
+        return didStatus === 'created';
       case 'documents':
         return documents.certificateOfIncorporation.file && documents.registryExtract.file;
       case 'verification':
         return verificationStatus === 'awaiting-review' || verificationStatus === 'verified';
       case 'vc-issuance':
-        return verificationCredential !== null;
+        return vcStatus === 'issued';
       default:
         return false;
     }
