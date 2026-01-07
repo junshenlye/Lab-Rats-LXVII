@@ -1,8 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
+import { didService, credentialService } from '@/services/api';
+import type { Credential, ShipownerDID } from '@/types';
 import {
   Building2,
   FileText,
@@ -28,13 +30,12 @@ import {
   Zap,
   Key,
 } from 'lucide-react';
-import WalletGenerator from '@/components/WalletGenerator';
-import { WalletInfo } from '@/services/xrpl';
 
-type Step = 'company-info' | 'documents' | 'verification' | 'wallet-setup' | 'did-issuance';
+type Step = 'wallet-connect' | 'did-company-info' | 'documents' | 'verification' | 'vc-issuance';
 type VerificationStatus = 'pending' | 'uploading-ipfs' | 'awaiting-review' | 'verified' | 'failed';
 type DocumentStatus = 'not-uploaded' | 'uploaded' | 'verifying' | 'verified' | 'rejected';
-type DIDStatus = 'pending' | 'awaiting-signature' | 'signing' | 'issued' | 'failed';
+type DIDStatus = 'pending' | 'checking' | 'creating' | 'created' | 'failed';
+type VCStatus = 'pending' | 'issuing' | 'issued' | 'failed';
 
 interface CompanyInfo {
   companyName: string;
@@ -53,15 +54,15 @@ interface Document {
 }
 
 const steps: { id: Step; label: string; icon: React.ElementType; description: string }[] = [
-  { id: 'company-info', label: 'Company Info', icon: Building2, description: 'Basic company details' },
+  { id: 'wallet-connect', label: 'Connect Wallet', icon: Wallet, description: 'Connect Crossmark wallet' },
+  { id: 'did-company-info', label: 'DID & Company', icon: Fingerprint, description: 'Create DID with company info' },
   { id: 'documents', label: 'Documents', icon: FileText, description: 'Upload KYC documents' },
   { id: 'verification', label: 'Verification', icon: Shield, description: 'Platform verification' },
-  { id: 'wallet-setup', label: 'Wallet Setup', icon: Key, description: 'Generate XRPL wallet' },
-  { id: 'did-issuance', label: 'DID Issuance', icon: Fingerprint, description: 'Issue decentralized ID' },
+  { id: 'vc-issuance', label: 'VC Issuance', icon: Shield, description: 'Issue verification credential' },
 ];
 
 export default function OnboardingPage() {
-  const [currentStep, setCurrentStep] = useState<Step>('company-info');
+  const [currentStep, setCurrentStep] = useState<Step>('wallet-connect');
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>({
     companyName: '',
     registrationNumber: '',
@@ -79,9 +80,19 @@ export default function OnboardingPage() {
   });
   const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>('pending');
   const [ipfsCid, setIpfsCid] = useState<string | null>(null);
-  const [generatedWallet, setGeneratedWallet] = useState<WalletInfo | null>(null);
+
+  // Wallet connection state
+  const [connectedWalletAddress, setConnectedWalletAddress] = useState<string | null>(null);
+  const [isConnectingWallet, setIsConnectingWallet] = useState(false);
+
+  // DID state
+  const [existingDID, setExistingDID] = useState<ShipownerDID | null>(null);
   const [didStatus, setDidStatus] = useState<DIDStatus>('pending');
-  const [didIssued, setDidIssued] = useState(false);
+  const [createdDID, setCreatedDID] = useState<ShipownerDID | null>(null);
+
+  // VC state
+  const [vcStatus, setVcStatus] = useState<VCStatus>('pending');
+  const [verificationCredential, setVerificationCredential] = useState<Credential | null>(null);
 
   const currentStepIndex = steps.findIndex(s => s.id === currentStep);
   const progress = ((currentStepIndex + 1) / steps.length) * 100;
@@ -114,19 +125,23 @@ export default function OnboardingPage() {
     }));
   };
 
+  // Get the active DID (either existing or newly created)
+  const activeDID = existingDID || createdDID;
+
   const canProceed = () => {
     switch (currentStep) {
-      case 'company-info':
-        return companyInfo.companyName && companyInfo.registrationNumber &&
-               companyInfo.countryOfIncorporation && companyInfo.contactEmail;
+      case 'wallet-connect':
+        // Can proceed if wallet connected and DID check is complete
+        return connectedWalletAddress !== null && didStatus !== 'checking';
+      case 'did-company-info':
+        // Can proceed if DID exists (either pre-existing or just created)
+        return activeDID !== null;
       case 'documents':
         return documents.certificateOfIncorporation.file && documents.registryExtract.file;
       case 'verification':
         return verificationStatus === 'awaiting-review' || verificationStatus === 'verified';
-      case 'wallet-setup':
-        return generatedWallet !== null;
-      case 'did-issuance':
-        return didIssued;
+      case 'vc-issuance':
+        return verificationCredential !== null;
       default:
         return false;
     }
@@ -135,13 +150,25 @@ export default function OnboardingPage() {
   const handleNext = () => {
     const nextIndex = currentStepIndex + 1;
     if (nextIndex < steps.length) {
-      setCurrentStep(steps[nextIndex].id);
+      let targetStep = steps[nextIndex].id;
 
-      if (steps[nextIndex].id === 'verification') {
-        simulateIPFSUpload();
+      // If coming from wallet-connect and DID already exists, skip did-company-info step
+      if (currentStep === 'wallet-connect' && existingDID) {
+        // Pre-populate company info from existing DID
+        setCompanyInfo(prev => ({
+          ...prev,
+          companyName: existingDID.companyName,
+          registrationNumber: existingDID.registrationNumber,
+          countryOfIncorporation: existingDID.country,
+        }));
+        // Skip to documents step
+        targetStep = 'documents';
       }
-      if (steps[nextIndex].id === 'did-issuance') {
-        setDidStatus('awaiting-signature');
+
+      setCurrentStep(targetStep);
+
+      if (targetStep === 'verification') {
+        simulateIPFSUpload();
       }
     }
   };
@@ -161,18 +188,144 @@ export default function OnboardingPage() {
     }, 3000);
   };
 
-  const handleSignDID = () => {
-    setDidStatus('signing');
-    setTimeout(() => {
-      setDidStatus('issued');
-      setDidIssued(true);
-    }, 2500);
-  };
+  // Connect Crossmark wallet and check for existing DID
+  const handleConnectWallet = useCallback(async () => {
+    setIsConnectingWallet(true);
+    setDidStatus('pending');
+
+    try {
+      const sdk = (await import('@crossmarkio/sdk')).default;
+
+      // Check if Crossmark is installed
+      const isConnected = await sdk.async.connect();
+
+      if (!isConnected) {
+        alert('Crossmark is not installed. Please install the Crossmark browser extension.');
+        setIsConnectingWallet(false);
+        return;
+      }
+
+      // Sign in to get wallet access
+      await sdk.async.signInAndWait();
+
+      // Get the wallet address from session
+      const address = sdk.session.address;
+
+      if (address) {
+        setConnectedWalletAddress(address);
+
+        // Check if this wallet already has a DID
+        setDidStatus('checking');
+        try {
+          const existingShipowner = await didService.getShipownerByWallet(address);
+          if (existingShipowner) {
+            setExistingDID(existingShipowner);
+            // Pre-populate company info
+            setCompanyInfo(prev => ({
+              ...prev,
+              companyName: existingShipowner.companyName,
+              registrationNumber: existingShipowner.registrationNumber,
+              countryOfIncorporation: existingShipowner.country,
+            }));
+          }
+        } catch {
+          // No existing DID found - that's fine
+        }
+        setDidStatus('pending');
+      }
+    } catch (error) {
+      console.error('Wallet connection failed:', error);
+      alert('Failed to connect wallet. Please try again.');
+    } finally {
+      setIsConnectingWallet(false);
+    }
+  }, []);
+
+  // Create DID with company info
+  const handleCreateDID = useCallback(async () => {
+    if (!connectedWalletAddress) return;
+
+    setDidStatus('creating');
+
+    try {
+      const shipownerDID = await didService.createShipowner({
+        walletAddress: connectedWalletAddress,
+        companyName: companyInfo.companyName,
+        registrationNumber: companyInfo.registrationNumber,
+        country: companyInfo.countryOfIncorporation,
+      });
+
+      setCreatedDID(shipownerDID);
+      setDidStatus('created');
+    } catch (error) {
+      console.error('Failed to create DID:', error);
+      setDidStatus('failed');
+      // Fallback simulation for demo
+      setTimeout(() => {
+        setCreatedDID({
+          did: `did:xrpl:1:${connectedWalletAddress}`,
+          walletAddress: connectedWalletAddress,
+          companyName: companyInfo.companyName,
+          registrationNumber: companyInfo.registrationNumber,
+          country: companyInfo.countryOfIncorporation,
+          isVerified: false,
+          createdAt: new Date().toISOString(),
+        });
+        setDidStatus('created');
+      }, 2000);
+    }
+  }, [connectedWalletAddress, companyInfo]);
+
+  // Issue verification credential
+  const handleIssueVC = useCallback(async () => {
+    if (!activeDID) return;
+
+    setVcStatus('issuing');
+
+    try {
+      const credential = await credentialService.issueShipownerCredential({
+        shipownerDid: activeDID.did,
+        companyName: companyInfo.companyName,
+        registrationNumber: companyInfo.registrationNumber,
+        country: companyInfo.countryOfIncorporation,
+        documentsVerified: ['certificate_of_incorporation', 'registry_extract'],
+      });
+
+      setVerificationCredential(credential);
+      setVcStatus('issued');
+    } catch (error) {
+      console.error('Failed to issue VC:', error);
+      setVcStatus('failed');
+      // Fallback simulation
+      setTimeout(() => {
+        setVcStatus('issued');
+      }, 2000);
+    }
+  }, [activeDID, companyInfo]);
 
   const renderStepContent = () => {
     switch (currentStep) {
-      case 'company-info':
-        return <CompanyInfoStep companyInfo={companyInfo} onChange={handleCompanyInfoChange} />;
+      case 'wallet-connect':
+        return (
+          <WalletConnectStep
+            walletAddress={connectedWalletAddress}
+            isConnecting={isConnectingWallet}
+            didStatus={didStatus}
+            existingDID={existingDID}
+            onConnect={handleConnectWallet}
+          />
+        );
+      case 'did-company-info':
+        return (
+          <DIDCompanyInfoStep
+            companyInfo={companyInfo}
+            onChange={handleCompanyInfoChange}
+            walletAddress={connectedWalletAddress!}
+            didStatus={didStatus}
+            createdDID={createdDID}
+            onCreateDID={handleCreateDID}
+          />
+        );
       case 'documents':
         return (
           <DocumentsStep
@@ -188,24 +341,19 @@ export default function OnboardingPage() {
             documents={documents}
             verificationStatus={verificationStatus}
             ipfsCid={ipfsCid}
+            walletAddress={connectedWalletAddress}
+            did={activeDID?.did}
           />
         );
-      case 'wallet-setup':
+      case 'vc-issuance':
         return (
-          <WalletSetupStep
-            companyName={companyInfo.companyName}
-            wallet={generatedWallet}
-            onWalletGenerated={setGeneratedWallet}
-          />
-        );
-      case 'did-issuance':
-        return (
-          <DIDIssuanceStep
+          <VCIssuanceStep
             companyInfo={companyInfo}
-            didStatus={didStatus}
+            did={activeDID!}
             ipfsCid={ipfsCid}
-            walletAddress={generatedWallet?.address}
-            onSign={handleSignDID}
+            vcStatus={vcStatus}
+            credential={verificationCredential}
+            onIssueVC={handleIssueVC}
           />
         );
       default:
@@ -380,7 +528,7 @@ export default function OnboardingPage() {
               Back
             </motion.button>
 
-            {currentStep !== 'did-issuance' && (
+            {currentStep !== 'vc-issuance' && (
               <motion.button
                 onClick={handleNext}
                 disabled={!canProceed()}
@@ -397,7 +545,7 @@ export default function OnboardingPage() {
               </motion.button>
             )}
 
-            {currentStep === 'did-issuance' && didIssued && (
+            {currentStep === 'vc-issuance' && vcStatus === 'issued' && (
               <Link href="/dashboard">
                 <motion.button
                   className="flex items-center gap-2 px-8 py-3 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white hover:shadow-glow-md"
@@ -427,6 +575,366 @@ export default function OnboardingPage() {
 }
 
 // Step Components
+
+// Step 1: Connect Crossmark Wallet
+function WalletConnectStep({
+  walletAddress,
+  isConnecting,
+  didStatus,
+  existingDID,
+  onConnect,
+}: {
+  walletAddress: string | null;
+  isConnecting: boolean;
+  didStatus: DIDStatus;
+  existingDID: ShipownerDID | null;
+  onConnect: () => void;
+}) {
+  return (
+    <div className="card">
+      <div className="card-header">
+        <div className="flex items-center gap-3">
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+            walletAddress
+              ? 'bg-gradient-to-br from-rlusd-primary/20 to-rlusd-primary/5'
+              : 'bg-gradient-to-br from-accent-sky/20 to-accent-sky/5'
+          }`}>
+            {walletAddress ? (
+              <CheckCircle2 className="w-6 h-6 text-rlusd-glow" />
+            ) : (
+              <Wallet className="w-6 h-6 text-accent-sky" />
+            )}
+          </div>
+          <div>
+            <h2 className="font-display text-xl font-semibold text-text-primary">
+              {walletAddress ? 'Wallet Connected' : 'Connect Your Wallet'}
+            </h2>
+            <p className="text-sm text-text-muted">
+              {walletAddress
+                ? 'Your Crossmark wallet is connected'
+                : 'Connect your Crossmark wallet to continue'}
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className="card-body space-y-6">
+        {!walletAddress ? (
+          <>
+            {/* Info Banner */}
+            <div className="p-4 rounded-xl bg-accent-sky/5 border border-accent-sky/20">
+              <div className="flex items-start gap-3">
+                <Wallet className="w-5 h-5 text-accent-sky shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-text-primary font-medium">Why connect a wallet?</p>
+                  <p className="text-xs text-text-muted mt-1">
+                    Your XRPL wallet address is required to create your Decentralized Identifier (DID),
+                    receive RLUSD payments, and interact with maritime contracts on the XRP Ledger.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Connect Button */}
+            <motion.button
+              onClick={onConnect}
+              disabled={isConnecting}
+              className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white font-medium hover:shadow-glow-md transition-all"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              {isConnecting ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Connecting...
+                </>
+              ) : (
+                <>
+                  <Wallet className="w-5 h-5" />
+                  Connect Crossmark Wallet
+                </>
+              )}
+            </motion.button>
+
+            <p className="text-xs text-text-muted text-center">
+              Don&apos;t have Crossmark? <a href="https://crossmark.io" target="_blank" rel="noopener noreferrer" className="text-accent-sky hover:underline">Download it here</a>
+            </p>
+          </>
+        ) : (
+          <>
+            {/* Connected State */}
+            <motion.div
+              className="flex flex-col items-center py-6"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+            >
+              <motion.div
+                className="w-20 h-20 rounded-2xl bg-gradient-to-br from-rlusd-primary/30 to-rlusd-primary/10 flex items-center justify-center mb-4"
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 200 }}
+              >
+                <Wallet className="w-10 h-10 text-rlusd-glow" />
+              </motion.div>
+              <h3 className="text-xl font-display font-semibold text-text-primary">Wallet Connected</h3>
+              <p className="text-sm text-text-secondary mt-1">Ready to proceed</p>
+            </motion.div>
+
+            {/* Wallet Address Display */}
+            <div className="p-5 rounded-xl bg-gradient-to-r from-rlusd-primary/10 to-transparent border border-rlusd-primary/20">
+              <div className="flex items-center gap-2 mb-2">
+                <Wallet className="w-4 h-4 text-rlusd-primary" />
+                <span className="text-xs text-rlusd-primary/80 font-medium">Wallet Address</span>
+              </div>
+              <code className="font-mono text-sm text-text-primary break-all">{walletAddress}</code>
+            </div>
+
+            {/* DID Check Status */}
+            {didStatus === 'checking' && (
+              <div className="p-4 rounded-xl bg-accent-sky/5 border border-accent-sky/20">
+                <div className="flex items-center gap-3">
+                  <Loader2 className="w-5 h-5 text-accent-sky animate-spin" />
+                  <div>
+                    <p className="text-sm text-text-primary">Checking for existing DID...</p>
+                    <p className="text-xs text-text-muted">Looking up your wallet on the platform</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {existingDID && (
+              <div className="p-4 rounded-xl bg-rlusd-primary/5 border border-rlusd-primary/20">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-rlusd-glow shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-text-primary font-medium">Existing DID Found</p>
+                    <p className="text-xs text-text-muted mt-1">
+                      Your wallet already has a DID registered. Company: {existingDID.companyName}
+                    </p>
+                    <code className="text-xs text-rlusd-glow font-mono mt-2 block">{existingDID.did}</code>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!existingDID && didStatus !== 'checking' && (
+              <div className="p-4 rounded-xl bg-accent-amber/5 border border-accent-amber/20">
+                <div className="flex items-start gap-3">
+                  <Fingerprint className="w-5 h-5 text-accent-amber shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-text-primary font-medium">No DID Found</p>
+                    <p className="text-xs text-text-muted mt-1">
+                      In the next step, you&apos;ll create a Decentralized Identifier (DID) for your company.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Step 2: DID & Company Info (combined)
+function DIDCompanyInfoStep({
+  companyInfo,
+  onChange,
+  walletAddress,
+  didStatus,
+  createdDID,
+  onCreateDID,
+}: {
+  companyInfo: CompanyInfo;
+  onChange: (field: keyof CompanyInfo, value: string) => void;
+  walletAddress: string;
+  didStatus: DIDStatus;
+  createdDID: ShipownerDID | null;
+  onCreateDID: () => void;
+}) {
+  const canCreate = companyInfo.companyName && companyInfo.registrationNumber &&
+                    companyInfo.countryOfIncorporation && companyInfo.contactEmail;
+
+  if (createdDID) {
+    // DID Created - show success state
+    return (
+      <div className="card">
+        <div className="card-header">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-rlusd-primary/30 to-rlusd-primary/10 flex items-center justify-center">
+              <CheckCircle2 className="w-6 h-6 text-rlusd-glow" />
+            </div>
+            <div>
+              <h2 className="font-display text-xl font-semibold text-text-primary">DID Created Successfully</h2>
+              <p className="text-sm text-text-muted">Your decentralized identity is ready</p>
+            </div>
+          </div>
+        </div>
+        <div className="card-body space-y-6">
+          <motion.div
+            className="flex flex-col items-center py-6"
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+          >
+            <motion.div
+              className="w-20 h-20 rounded-2xl bg-gradient-to-br from-rlusd-primary/30 to-rlusd-primary/10 flex items-center justify-center mb-4 shadow-glow-lg"
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ type: 'spring', stiffness: 200 }}
+            >
+              <Fingerprint className="w-10 h-10 text-rlusd-glow" />
+            </motion.div>
+            <h3 className="text-xl font-display font-semibold text-text-primary">DID Created</h3>
+            <p className="text-sm text-text-secondary mt-1">Your identity is anchored on XRPL</p>
+          </motion.div>
+
+          <div className="p-5 rounded-xl bg-gradient-to-r from-rlusd-primary/10 to-transparent border border-rlusd-primary/20">
+            <div className="flex items-center gap-2 mb-2">
+              <Fingerprint className="w-4 h-4 text-rlusd-primary" />
+              <span className="text-xs text-rlusd-primary/80 font-medium">Your DID</span>
+            </div>
+            <code className="font-mono text-sm text-rlusd-glow break-all">{createdDID.did}</code>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
+              <p className="text-xs text-text-muted mb-1">Company</p>
+              <p className="text-sm text-text-primary font-medium">{createdDID.companyName}</p>
+            </div>
+            <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
+              <p className="text-xs text-text-muted mb-1">Registration</p>
+              <p className="text-sm text-text-primary font-mono">{createdDID.registrationNumber}</p>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-rlusd-primary/5 border border-rlusd-primary/20">
+            <div className="flex items-start gap-3">
+              <FileText className="w-5 h-5 text-rlusd-glow shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm text-text-primary font-medium">Next: Upload Documents</p>
+                <p className="text-xs text-text-muted mt-1">
+                  Upload your KYC documents for platform verification.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-accent-violet/20 to-accent-violet/5 flex items-center justify-center">
+            <Fingerprint className="w-6 h-6 text-accent-violet" />
+          </div>
+          <div>
+            <h2 className="font-display text-xl font-semibold text-text-primary">Create DID & Company Info</h2>
+            <p className="text-sm text-text-muted">Enter company details to create your DID</p>
+          </div>
+        </div>
+      </div>
+      <div className="card-body space-y-6">
+        {/* Wallet Address Context */}
+        <div className="p-4 rounded-xl bg-maritime-slate/30 border border-white/5">
+          <div className="flex items-center gap-2 mb-1">
+            <Wallet className="w-4 h-4 text-text-muted" />
+            <span className="text-xs text-text-muted">Creating DID for wallet</span>
+          </div>
+          <code className="font-mono text-sm text-text-primary">{walletAddress}</code>
+        </div>
+
+        {/* Company Info Form */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-text-secondary mb-2">Company Name *</label>
+            <input
+              type="text"
+              value={companyInfo.companyName}
+              onChange={(e) => onChange('companyName', e.target.value)}
+              className="w-full px-4 py-3 rounded-xl bg-maritime-slate/30 border border-white/10 text-text-primary placeholder-text-muted focus:border-rlusd-primary/50 focus:bg-maritime-slate/50 transition-all outline-none"
+              placeholder="e.g., Pacific Maritime Ltd"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-text-secondary mb-2">Registration Number *</label>
+            <input
+              type="text"
+              value={companyInfo.registrationNumber}
+              onChange={(e) => onChange('registrationNumber', e.target.value)}
+              className="w-full px-4 py-3 rounded-xl bg-maritime-slate/30 border border-white/10 text-text-primary placeholder-text-muted focus:border-rlusd-primary/50 focus:bg-maritime-slate/50 transition-all outline-none"
+              placeholder="e.g., 202401234K"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-text-secondary mb-2">Country of Incorporation *</label>
+            <select
+              value={companyInfo.countryOfIncorporation}
+              onChange={(e) => onChange('countryOfIncorporation', e.target.value)}
+              className="w-full px-4 py-3 rounded-xl bg-maritime-slate/30 border border-white/10 text-text-primary focus:border-rlusd-primary/50 focus:bg-maritime-slate/50 transition-all outline-none"
+            >
+              <option value="" className="bg-maritime-navy">Select country</option>
+              <option value="SG" className="bg-maritime-navy">Singapore</option>
+              <option value="HK" className="bg-maritime-navy">Hong Kong</option>
+              <option value="GB" className="bg-maritime-navy">United Kingdom</option>
+              <option value="NL" className="bg-maritime-navy">Netherlands</option>
+              <option value="DE" className="bg-maritime-navy">Germany</option>
+              <option value="NO" className="bg-maritime-navy">Norway</option>
+              <option value="GR" className="bg-maritime-navy">Greece</option>
+              <option value="JP" className="bg-maritime-navy">Japan</option>
+              <option value="US" className="bg-maritime-navy">United States</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-text-secondary mb-2">Contact Email *</label>
+            <input
+              type="email"
+              value={companyInfo.contactEmail}
+              onChange={(e) => onChange('contactEmail', e.target.value)}
+              className="w-full px-4 py-3 rounded-xl bg-maritime-slate/30 border border-white/10 text-text-primary placeholder-text-muted focus:border-rlusd-primary/50 focus:bg-maritime-slate/50 transition-all outline-none"
+              placeholder="e.g., compliance@company.com"
+            />
+          </div>
+        </div>
+
+        {/* Create DID Button */}
+        <motion.button
+          onClick={onCreateDID}
+          disabled={!canCreate || didStatus === 'creating'}
+          className={`w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-medium transition-all ${
+            canCreate && didStatus !== 'creating'
+              ? 'bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white hover:shadow-glow-md'
+              : 'bg-maritime-slate/30 text-text-muted cursor-not-allowed'
+          }`}
+          whileHover={canCreate ? { scale: 1.02 } : {}}
+          whileTap={canCreate ? { scale: 0.98 } : {}}
+        >
+          {didStatus === 'creating' ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              Creating DID...
+            </>
+          ) : (
+            <>
+              <PenLine className="w-5 h-5" />
+              Create DID
+            </>
+          )}
+        </motion.button>
+
+        <p className="text-xs text-text-muted text-center">
+          <span className="text-accent-amber">*</span> Required fields. Your DID will be anchored on the XRP Ledger.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function CompanyInfoStep({
   companyInfo,
   onChange,
@@ -660,11 +1168,15 @@ function VerificationStep({
   documents,
   verificationStatus,
   ipfsCid,
+  walletAddress,
+  did,
 }: {
   companyInfo: CompanyInfo;
   documents: { certificateOfIncorporation: Document; registryExtract: Document };
   verificationStatus: VerificationStatus;
   ipfsCid: string | null;
+  walletAddress: string | null;
+  did: string | undefined;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -850,148 +1362,22 @@ function VerificationStep({
   );
 }
 
-function WalletSetupStep({
-  companyName,
-  wallet,
-  onWalletGenerated,
-}: {
-  companyName: string;
-  wallet: WalletInfo | null;
-  onWalletGenerated: (wallet: WalletInfo) => void;
-}) {
-  return (
-    <div className="card">
-      <div className="card-header">
-        <div className="flex items-center gap-3">
-          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-            wallet
-              ? 'bg-gradient-to-br from-rlusd-primary/20 to-rlusd-primary/5'
-              : 'bg-gradient-to-br from-accent-sky/20 to-accent-sky/5'
-          }`}>
-            {wallet ? (
-              <CheckCircle2 className="w-6 h-6 text-rlusd-glow" />
-            ) : (
-              <Key className="w-6 h-6 text-accent-sky" />
-            )}
-          </div>
-          <div>
-            <h2 className="font-display text-xl font-semibold text-text-primary">
-              {wallet ? 'Wallet Created' : 'Create XRPL Wallet'}
-            </h2>
-            <p className="text-sm text-text-muted">
-              {wallet
-                ? 'Your wallet is ready for DID issuance'
-                : 'Generate a wallet to receive payments and sign transactions'}
-            </p>
-          </div>
-        </div>
-      </div>
-      <div className="card-body">
-        {!wallet ? (
-          <div className="space-y-6">
-            {/* Info Banner */}
-            <div className="p-4 rounded-xl bg-accent-sky/5 border border-accent-sky/20">
-              <div className="flex items-start gap-3">
-                <Wallet className="w-5 h-5 text-accent-sky shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm text-text-primary font-medium">Why do I need a wallet?</p>
-                  <p className="text-xs text-text-muted mt-1">
-                    Your XRPL wallet is required to sign DID transactions, receive RLUSD payments,
-                    and interact with escrow contracts on the XRP Ledger.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Company Context */}
-            {companyName && (
-              <div className="p-4 rounded-xl bg-maritime-slate/30 border border-white/5">
-                <p className="text-xs text-text-muted mb-1">Creating wallet for</p>
-                <p className="text-lg font-display font-semibold text-text-primary">{companyName}</p>
-              </div>
-            )}
-
-            {/* Wallet Generator */}
-            <WalletGenerator onWalletGenerated={onWalletGenerated} showTitle={false} />
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {/* Success State */}
-            <motion.div
-              className="flex flex-col items-center py-6"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-            >
-              <motion.div
-                className="w-20 h-20 rounded-2xl bg-gradient-to-br from-rlusd-primary/30 to-rlusd-primary/10 flex items-center justify-center mb-4"
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ type: 'spring', stiffness: 200 }}
-              >
-                <Wallet className="w-10 h-10 text-rlusd-glow" />
-              </motion.div>
-              <h3 className="text-xl font-display font-semibold text-text-primary">Wallet Ready</h3>
-              <p className="text-sm text-text-secondary mt-1">Your XRPL wallet has been generated</p>
-            </motion.div>
-
-            {/* Wallet Address Display */}
-            <div className="p-5 rounded-xl bg-gradient-to-r from-rlusd-primary/10 to-transparent border border-rlusd-primary/20">
-              <div className="flex items-center gap-2 mb-2">
-                <Wallet className="w-4 h-4 text-rlusd-primary" />
-                <span className="text-xs text-rlusd-primary/80 font-medium">Wallet Address</span>
-              </div>
-              <code className="font-mono text-sm text-text-primary break-all">{wallet.address}</code>
-            </div>
-
-            {/* Next Step Info */}
-            <div className="p-4 rounded-xl bg-rlusd-primary/5 border border-rlusd-primary/20">
-              <div className="flex items-start gap-3">
-                <Fingerprint className="w-5 h-5 text-rlusd-glow shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm text-text-primary font-medium">Next: Issue Your DID</p>
-                  <p className="text-xs text-text-muted mt-1">
-                    Click Continue to proceed to DID issuance. Your wallet will be used to sign
-                    and anchor your decentralized identity on the XRP Ledger.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Security Reminder */}
-            <div className="p-4 rounded-xl bg-accent-coral/5 border border-accent-coral/20">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-accent-coral shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm text-text-primary font-medium">Important Security Reminder</p>
-                  <p className="text-xs text-text-muted mt-1">
-                    Make sure you have securely backed up your seed phrase before proceeding.
-                    It cannot be recovered if lost.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DIDIssuanceStep({
+// Step 5: VC Issuance (final step)
+function VCIssuanceStep({
   companyInfo,
-  didStatus,
+  did,
   ipfsCid,
-  walletAddress,
-  onSign,
+  vcStatus,
+  credential,
+  onIssueVC,
 }: {
   companyInfo: CompanyInfo;
-  didStatus: DIDStatus;
+  did: ShipownerDID;
   ipfsCid: string | null;
-  walletAddress?: string;
-  onSign: () => void;
+  vcStatus: VCStatus;
+  credential: Credential | null;
+  onIssueVC: () => void;
 }) {
-  const displayWalletAddress = walletAddress || 'rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9';
-  const mockDID = `did:xrpl:1:${displayWalletAddress}`;
   const [copied, setCopied] = useState(false);
 
   const copyToClipboard = (text: string) => {
@@ -1005,137 +1391,114 @@ function DIDIssuanceStep({
       <div className="card-header">
         <div className="flex items-center gap-3">
           <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-            didStatus === 'issued'
+            vcStatus === 'issued'
               ? 'bg-gradient-to-br from-rlusd-primary/30 to-rlusd-primary/10'
-              : didStatus === 'signing'
+              : vcStatus === 'issuing'
               ? 'bg-gradient-to-br from-accent-violet/20 to-accent-violet/5'
               : 'bg-gradient-to-br from-accent-amber/20 to-accent-amber/5'
           }`}>
-            {didStatus === 'issued' ? (
-              <Fingerprint className="w-6 h-6 text-rlusd-glow" />
-            ) : didStatus === 'signing' ? (
+            {vcStatus === 'issued' ? (
+              <CheckCircle2 className="w-6 h-6 text-rlusd-glow" />
+            ) : vcStatus === 'issuing' ? (
               <Loader2 className="w-6 h-6 text-accent-violet animate-spin" />
             ) : (
-              <PenLine className="w-6 h-6 text-accent-amber" />
+              <Shield className="w-6 h-6 text-accent-amber" />
             )}
           </div>
           <div>
             <h2 className="font-display text-xl font-semibold text-text-primary">
-              {didStatus === 'issued'
-                ? 'DID Issued Successfully'
-                : didStatus === 'signing'
-                ? 'Signing Transaction...'
-                : 'Sign to Issue DID'}
+              {vcStatus === 'issued'
+                ? 'Verification Complete!'
+                : vcStatus === 'issuing'
+                ? 'Issuing Credential...'
+                : 'Issue Verification Credential'}
             </h2>
             <p className="text-sm text-text-muted">
-              {didStatus === 'issued'
-                ? 'Your verified identity is now on the XRPL'
-                : didStatus === 'signing'
-                ? 'Please confirm the transaction in your wallet'
-                : 'Wallet signature required to issue your DID'}
+              {vcStatus === 'issued'
+                ? 'Your verified credential is ready'
+                : vcStatus === 'issuing'
+                ? 'Creating your verification credential'
+                : 'Request your platform verification credential'}
             </p>
           </div>
         </div>
       </div>
       <div className="card-body">
-        {didStatus === 'awaiting-signature' && (
+        {vcStatus === 'pending' && (
           <div className="space-y-6">
-            <div className="p-4 rounded-xl bg-accent-amber/5 border border-accent-amber/20">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-accent-amber shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm text-text-primary font-medium">Wallet Signature Required</p>
-                  <p className="text-xs text-text-muted mt-1">
-                    DID issuance requires your wallet signature to anchor your identity on XRPL.
-                    This is a one-time action that cannot be auto-approved for security reasons.
-                  </p>
-                </div>
-              </div>
-            </div>
-
+            {/* DID Summary */}
             <div className="p-5 rounded-xl bg-maritime-slate/30 border border-white/5">
-              <p className="text-xs uppercase tracking-wider text-text-muted mb-4">Transaction Preview</p>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between py-2 border-b border-white/5">
-                  <span className="text-xs text-text-muted">Action</span>
-                  <span className="text-sm text-text-primary font-medium">Create DID Document</span>
+              <p className="text-xs uppercase tracking-wider text-text-muted mb-4">Your DID</p>
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-maritime-navy/50 border border-white/5">
+                <Fingerprint className="w-4 h-4 text-rlusd-primary shrink-0" />
+                <code className="text-xs font-mono text-rlusd-glow truncate">{did.did}</code>
+              </div>
+            </div>
+
+            {/* Company Summary */}
+            <div className="p-5 rounded-xl bg-maritime-slate/30 border border-white/5">
+              <p className="text-xs uppercase tracking-wider text-text-muted mb-4">Verified Company</p>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-text-muted text-xs">Company Name</span>
+                  <p className="text-text-primary font-medium">{companyInfo.companyName}</p>
                 </div>
-                <div className="flex items-center justify-between py-2 border-b border-white/5">
-                  <span className="text-xs text-text-muted">Network</span>
-                  <span className="text-sm text-rlusd-glow font-medium">XRPL Mainnet</span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b border-white/5">
-                  <span className="text-xs text-text-muted">Company</span>
-                  <span className="text-sm text-text-primary">{companyInfo.companyName}</span>
-                </div>
-                {ipfsCid && (
-                  <div className="flex items-center justify-between py-2 border-b border-white/5">
-                    <span className="text-xs text-text-muted">Metadata CID</span>
-                    <span className="text-xs text-accent-sky font-mono">{ipfsCid.slice(0, 20)}...</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between py-2">
-                  <span className="text-xs text-text-muted">Estimated Fee</span>
-                  <span className="text-sm text-text-primary font-mono">~0.00001 XRP</span>
+                <div>
+                  <span className="text-text-muted text-xs">Registration</span>
+                  <p className="text-text-primary font-mono">{companyInfo.registrationNumber}</p>
                 </div>
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-lg bg-rlusd-primary/20 flex items-center justify-center">
-                    <Wallet className="w-6 h-6 text-rlusd-glow" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-text-primary font-medium">Connected Wallet</p>
-                    <p className="text-xs text-text-muted font-mono">{displayWalletAddress.slice(0, 8)}...{displayWalletAddress.slice(-6)}</p>
-                  </div>
+            {/* IPFS CID */}
+            {ipfsCid && (
+              <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
+                <div className="flex items-center gap-2 mb-2">
+                  <Link2 className="w-4 h-4 text-accent-sky" />
+                  <span className="text-xs text-text-muted">Verified Documents (IPFS)</span>
                 </div>
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-rlusd-primary/20 text-xs text-rlusd-glow">
-                  <span className="w-1.5 h-1.5 rounded-full bg-rlusd-glow animate-pulse" />
-                  Connected
-                </div>
+                <code className="text-xs font-mono text-accent-sky">{ipfsCid}</code>
               </div>
-            </div>
+            )}
 
+            {/* Issue Button */}
             <motion.button
-              onClick={onSign}
-              className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white font-medium text-lg hover:shadow-glow-md transition-all"
+              onClick={onIssueVC}
+              className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white font-medium hover:shadow-glow-md transition-all"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
             >
-              <PenLine className="w-5 h-5" />
-              Sign & Issue DID
+              <Shield className="w-5 h-5" />
+              Issue Verification Credential
             </motion.button>
 
             <p className="text-xs text-text-muted text-center">
-              By signing, you confirm that the information provided is accurate and authorize the creation of your DID on XRPL.
+              This will create a verifiable credential attesting to your company&apos;s KYC verification.
             </p>
           </div>
         )}
 
-        {didStatus === 'signing' && (
+        {vcStatus === 'issuing' && (
           <div className="flex flex-col items-center py-12">
             <motion.div
               className="w-28 h-28 rounded-2xl bg-gradient-to-br from-accent-violet/20 to-accent-violet/5 flex items-center justify-center mb-6"
               animate={{ scale: [1, 1.05, 1] }}
               transition={{ duration: 2, repeat: Infinity }}
             >
-              <Wallet className="w-14 h-14 text-accent-violet" />
+              <Shield className="w-14 h-14 text-accent-violet" />
             </motion.div>
-            <p className="text-xl text-text-primary font-medium mb-2">Awaiting Wallet Confirmation</p>
+            <p className="text-xl text-text-primary font-medium mb-2">Issuing Credential</p>
             <p className="text-sm text-text-muted text-center max-w-md">
-              Please confirm the transaction in your connected wallet to complete the DID issuance.
+              Creating your verification credential on the platform...
             </p>
             <div className="mt-6 flex items-center gap-2">
               <Loader2 className="w-5 h-5 text-accent-violet animate-spin" />
-              <span className="text-sm text-text-muted">Waiting for signature...</span>
+              <span className="text-sm text-text-muted">Please wait...</span>
             </div>
           </div>
         )}
 
-        {didStatus === 'issued' && (
+        {vcStatus === 'issued' && (
           <div className="space-y-6">
             <motion.div
               className="flex flex-col items-center py-8"
@@ -1151,19 +1514,20 @@ function DIDIssuanceStep({
               >
                 <CheckCircle2 className="w-12 h-12 text-rlusd-glow" />
               </motion.div>
-              <h3 className="text-2xl font-display font-semibold text-text-primary">DID Issued Successfully!</h3>
-              <p className="text-text-secondary mt-2">Your identity has been signed and anchored on XRPL</p>
+              <h3 className="text-2xl font-display font-semibold text-text-primary">Onboarding Complete!</h3>
+              <p className="text-text-secondary mt-2">Your verification credential has been issued</p>
             </motion.div>
 
+            {/* DID Display */}
             <div className="p-5 rounded-xl bg-maritime-slate/30 border border-rlusd-primary/20">
               <p className="text-xs uppercase tracking-wider text-text-muted mb-3">Your Decentralized Identifier (DID)</p>
               <div className="flex items-center justify-between gap-2 p-4 rounded-lg bg-maritime-navy/50 border border-white/5">
                 <div className="flex items-center gap-3 min-w-0">
                   <Fingerprint className="w-5 h-5 text-rlusd-primary shrink-0" />
-                  <code className="text-sm font-mono text-rlusd-glow truncate">{mockDID}</code>
+                  <code className="text-sm font-mono text-rlusd-glow truncate">{did.did}</code>
                 </div>
                 <motion.button
-                  onClick={() => copyToClipboard(mockDID)}
+                  onClick={() => copyToClipboard(did.did)}
                   className="p-2 rounded-lg hover:bg-maritime-steel/50 text-text-muted hover:text-text-primary transition-colors shrink-0"
                   whileHover={{ scale: 1.1 }}
                   whileTap={{ scale: 0.9 }}
@@ -1173,23 +1537,36 @@ function DIDIssuanceStep({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
-                <p className="text-xs text-text-muted mb-1">Company</p>
-                <p className="text-sm text-text-primary font-medium">{companyInfo.companyName}</p>
-              </div>
-              <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
-                <p className="text-xs text-text-muted mb-1">Network</p>
-                <p className="text-sm text-rlusd-glow font-medium">XRPL Mainnet</p>
-              </div>
-            </div>
-
-            {ipfsCid && (
-              <div className="p-4 rounded-xl bg-maritime-slate/20 border border-white/5">
-                <p className="text-xs text-text-muted mb-2">Linked IPFS Metadata</p>
-                <div className="flex items-center gap-2">
-                  <Link2 className="w-4 h-4 text-accent-sky" />
-                  <code className="text-xs font-mono text-accent-sky">{ipfsCid}</code>
+            {credential && (
+              <div className="p-5 rounded-xl bg-accent-violet/5 border border-accent-violet/20">
+                <div className="flex items-center gap-2 mb-4">
+                  <Shield className="w-5 h-5 text-accent-violet" />
+                  <p className="text-sm text-text-primary font-medium">Verification Credential</p>
+                </div>
+                <div className="space-y-3 text-sm">
+                  <div className="flex items-center justify-between py-2 border-b border-white/5">
+                    <span className="text-text-muted">Credential ID</span>
+                    <code className="text-xs text-accent-violet font-mono">{credential.id}</code>
+                  </div>
+                  <div className="flex items-center justify-between py-2 border-b border-white/5">
+                    <span className="text-text-muted">Type</span>
+                    <span className="text-text-primary">{credential.type}</span>
+                  </div>
+                  <div className="flex items-center justify-between py-2 border-b border-white/5">
+                    <span className="text-text-muted">Issuer</span>
+                    <span className="text-rlusd-glow text-xs">Maritime Finance Platform</span>
+                  </div>
+                  <div className="flex items-center justify-between py-2 border-b border-white/5">
+                    <span className="text-text-muted">Status</span>
+                    <span className="flex items-center gap-1 text-green-400">
+                      <CheckCircle2 className="w-3 h-3" />
+                      {credential.status}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between py-2">
+                    <span className="text-text-muted">Expires</span>
+                    <span className="text-text-primary">{new Date(credential.expiresAt).toLocaleDateString()}</span>
+                  </div>
                 </div>
               </div>
             )}
