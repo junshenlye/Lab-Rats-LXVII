@@ -1410,8 +1410,8 @@ function VCPendingStep({
   return (
     <div className="card">
       <div className="card-header">
-        <div className="flex items-start gap-3 w-full">
-          <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
+        <div className="flex items-center gap-3 w-full">
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
             vcStatus === 'ready-to-accept'
               ? 'bg-gradient-to-br from-rlusd-primary/30 to-rlusd-primary/10'
               : 'bg-gradient-to-br from-accent-amber/20 to-accent-amber/5'
@@ -1422,11 +1422,11 @@ function VCPendingStep({
               <Clock className="w-6 h-6 text-accent-amber" />
             )}
           </div>
-          <div className="flex-1">
-            <h2 className="font-display text-xl font-semibold text-text-primary">
+          <div className="flex-1 min-w-0">
+            <h2 className="font-display text-xl font-semibold text-text-primary leading-tight">
               {vcStatus === 'ready-to-accept' ? 'Credential Ready!' : 'Verification Pending'}
             </h2>
-            <p className="text-sm text-text-muted">
+            <p className="text-sm text-text-muted mt-0.5">
               {vcStatus === 'ready-to-accept'
                 ? 'Your credential is ready to accept'
                 : 'Platform is verifying your documents...'}
