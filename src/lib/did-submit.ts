@@ -43,15 +43,16 @@ export async function signAndSubmitDIDWithCrossmark(
       };
     }
 
-    if (!(window as any).crossmark) {
+    // Import Crossmark SDK
+    const { default: sdk } = await import('@crossmarkio/sdk');
+
+    // Verify Crossmark is connected
+    if (!sdk.session?.address) {
       return {
         success: false,
-        error: 'Crossmark wallet not available. Please ensure extension is installed.',
+        error: 'Crossmark wallet not connected. Please connect your wallet first.',
       };
     }
-
-    // Get Crossmark SDK from window
-    const sdk = (window as any).crossmark;
 
     console.log('[DID Submit] Preparing DIDSet transaction for signing:', transaction);
 
@@ -78,8 +79,10 @@ export async function signAndSubmitDIDWithCrossmark(
 
     // Prepare the transaction for Crossmark to sign
     // Include all fields - Crossmark needs the complete transaction to sign
-    const txRequest = {
-      TransactionType: transaction.TransactionType,
+    // Cast to any because Crossmark SDK expects specific transaction types
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const txRequest: any = {
+      TransactionType: transaction.TransactionType as 'DIDSet',
       Account: transaction.Account,
       URI: transaction.URI,
       Fee: transaction.Fee,
@@ -91,9 +94,10 @@ export async function signAndSubmitDIDWithCrossmark(
     console.log('[DID Submit] Full transaction to sign:', txRequest);
     console.log('[DID Submit] Requesting Crossmark to sign transaction...');
 
-    // Request Crossmark to sign the transaction using the correct SDK method
+    // Request Crossmark to sign the transaction
+    // Use sdk.async.signAndWait() which is the correct Crossmark SDK method for signing transactions
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const signResponse = await sdk.sign(txRequest) as any;
+    const signResponse = await (sdk.async.signAndWait(txRequest) as any);
 
     console.log('[DID Submit] Crossmark sign response received:', signResponse);
 
@@ -105,41 +109,43 @@ export async function signAndSubmitDIDWithCrossmark(
       };
     }
 
-    if (!signResponse.signedTransaction) {
-      console.error('[DID Submit] ERROR: Crossmark response missing signedTransaction:', signResponse);
+    // Handle different response structures from Crossmark SDK
+    // The response contains a tx_blob (the signed transaction in binary format)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const signedTxBlob = (signResponse as any).tx_blob ||
+                         (signResponse as any).signedTransaction ||
+                         (signResponse as any).blob;
+
+    if (!signedTxBlob) {
+      console.error('[DID Submit] ERROR: Crossmark response missing signed transaction:', signResponse);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const errorMsg = (signResponse as any).error || (signResponse as any).message || 'Crossmark failed to sign the transaction. Please try again.';
       return {
         success: false,
-        error: signResponse.error || 'Crossmark failed to sign the transaction. Please try again.',
+        error: errorMsg,
       };
     }
 
-    const signedTx = signResponse.signedTransaction;
     console.log('[DID Submit] Transaction signed successfully');
-    console.log('[DID Submit] Signed transaction object:', signedTx);
+    console.log('[DID Submit] Signed transaction blob length:', signedTxBlob.length);
 
-    // Validate that signed transaction has a Signature field (proof of signing)
-    if (!(signedTx as any).Signature) {
-      console.error('[DID Submit] ERROR: Signed transaction missing Signature field!', signedTx);
-      return {
-        success: false,
-        error: 'Transaction was not properly signed. Missing Signature field.',
-      };
-    }
+    // The signed transaction blob is ready for submission
+    // We'll submit it directly to XRPL
 
-    console.log('[DID Submit] ✓ Signature field confirmed present');
+    console.log('[DID Submit] ✓ Transaction ready for submission');
 
     // Now submit the signed transaction to XRPL testnet
-    console.log('[DID Submit] ✓ Transaction ready for submission');
     console.log('[DID Submit] Connecting to XRPL testnet for submission...');
     client = new Client('wss://s.altnet.rippletest.net:51234');
     await client.connect();
     console.log('[DID Submit] ✓ Connected to XRPL testnet');
 
-    console.log('[DID Submit] Submitting signed transaction to ledger...');
+    console.log('[DID Submit] Submitting signed transaction blob to ledger...');
 
-    // Submit and wait for confirmation
+    // Submit the signed transaction blob and wait for confirmation
+    // The blob is the hex-encoded signed transaction from Crossmark
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await client.submitAndWait(signedTx as any);
+    const result = await client.submitAndWait(signedTxBlob);
 
     console.log('[DID Submit] Full transaction result:', result);
     console.log('[DID Submit] Transaction result object:', result.result);
