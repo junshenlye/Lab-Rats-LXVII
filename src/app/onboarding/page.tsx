@@ -1,8 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
+import { connectCrossmarkWallet } from '@/lib/wallet';
+import { checkDidOnTestnet, createDID } from '@/lib/did';
 import {
   Building2,
   FileText,
@@ -32,7 +34,7 @@ import {
 type Step = 'wallet-connect' | 'did-company-info' | 'documents' | 'verification' | 'vc-issuance';
 type VerificationStatus = 'pending' | 'uploading-ipfs' | 'awaiting-review' | 'verified' | 'failed';
 type DocumentStatus = 'not-uploaded' | 'uploaded' | 'verifying' | 'verified' | 'rejected';
-type DIDStatus = 'pending' | 'checking' | 'found' | 'not-found' | 'creating' | 'created' | 'failed';
+type DIDStatus = 'pending' | 'checking' | 'found' | 'not-found' | 'creating' | 'created' | 'failed' | 'testnet_error';
 type VCStatus = 'pending' | 'issuing' | 'issued' | 'failed';
 
 interface CompanyInfo {
@@ -79,6 +81,7 @@ export default function OnboardingPage() {
   const [connectedWalletAddress, setConnectedWalletAddress] = useState<string | null>(null);
   const [isConnectingWallet, setIsConnectingWallet] = useState(false);
   const [didStatus, setDidStatus] = useState<DIDStatus>('pending');
+  const [didErrorMessage, setDidErrorMessage] = useState<string | null>(null);
   const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>('pending');
   const [vcStatus, setVcStatus] = useState<VCStatus>('pending');
   const [ipfsCid, setIpfsCid] = useState<string | null>(null);
@@ -117,8 +120,12 @@ export default function OnboardingPage() {
   const canProceed = () => {
     switch (currentStep) {
       case 'wallet-connect':
-        // Can proceed if wallet connected and DID check is not running and no network failure
-        return connectedWalletAddress !== null && didStatus !== 'checking' && didStatus !== 'failed';
+        // Can proceed if wallet connected and DID check is complete (whether found or not-found)
+        // Cannot proceed if testnet is down or still checking
+        return (
+          connectedWalletAddress !== null &&
+          (didStatus === 'found' || didStatus === 'not-found')
+        );
       case 'did-company-info':
         // Can proceed if DID creation was successful
         return didStatus === 'created';
@@ -157,22 +164,78 @@ export default function OnboardingPage() {
     }
   };
 
-  const handleConnectWallet = () => {
+  const handleConnectWallet = async () => {
     setIsConnectingWallet(true);
-    // Simulate wallet connection
-    setTimeout(() => {
-      setConnectedWalletAddress('rXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
+    setDidErrorMessage(null);
+    setDidStatus('checking');
+
+    try {
+      // Connect to Crossmark wallet
+      const walletResult = await connectCrossmarkWallet();
+
+      if (!walletResult.success || !walletResult.address) {
+        setIsConnectingWallet(false);
+        setDidStatus('testnet_error');
+        setDidErrorMessage(walletResult.error || 'Failed to connect wallet');
+        return;
+      }
+
+      // Set wallet address
+      setConnectedWalletAddress(walletResult.address);
+
+      // Check if DID exists on testnet (now using API proxy to avoid CORS)
+      const didResult = await checkDidOnTestnet(walletResult.address);
+
+      if (didResult.error === 'testnet_unreachable') {
+        // Testnet is down - this is an error state requiring retry
+        setDidStatus('testnet_error');
+        setDidErrorMessage(didResult.errorMessage || 'XRPL testnet is unreachable');
+      } else if (didResult.error === 'did_not_found') {
+        // DID doesn't exist on testnet - this is normal, user can create one
+        setDidStatus('not-found');
+        setDidErrorMessage(null); // Clear error message for normal flow
+      } else if (didResult.exists) {
+        // DID already exists
+        setDidStatus('found');
+        setDidErrorMessage(null); // Clear error message
+      } else {
+        // Unknown error - treat as non-blocking (allow user to proceed)
+        setDidStatus('not-found');
+        setDidErrorMessage(null);
+      }
+    } catch (error) {
+      // If wallet connection itself fails, show error
+      setConnectedWalletAddress(null);
+      setDidStatus('testnet_error');
+      setDidErrorMessage(error instanceof Error ? error.message : 'Unknown error');
+    } finally {
       setIsConnectingWallet(false);
-      setDidStatus('not-found');
-    }, 1500);
+    }
   };
 
-  const handleCreateDID = () => {
+  const handleCreateDID = async () => {
     setDidStatus('creating');
-    // Simulate DID creation
-    setTimeout(() => {
-      setDidStatus('created');
-    }, 1500);
+    setDidErrorMessage(null);
+
+    try {
+      if (!connectedWalletAddress) {
+        setDidStatus('failed');
+        setDidErrorMessage('Wallet address not available');
+        return;
+      }
+
+      const result = await createDID(connectedWalletAddress, companyInfo.companyName);
+
+      if (result.success) {
+        setDidStatus('created');
+      } else {
+        setDidStatus('failed');
+        setDidErrorMessage(result.error || 'Failed to create DID');
+      }
+    } catch (error) {
+      setDidStatus('failed');
+      setDidErrorMessage(error instanceof Error ? error.message : 'Unknown error');
+    }
   };
 
   const handleIssueVC = () => {
@@ -191,6 +254,7 @@ export default function OnboardingPage() {
             walletAddress={connectedWalletAddress}
             isConnecting={isConnectingWallet}
             didStatus={didStatus}
+            didErrorMessage={didErrorMessage}
             onConnect={handleConnectWallet}
           />
         );
@@ -201,6 +265,7 @@ export default function OnboardingPage() {
             onChange={handleCompanyInfoChange}
             walletAddress={connectedWalletAddress!}
             didStatus={didStatus}
+            didErrorMessage={didErrorMessage}
             onCreateDID={handleCreateDID}
           />
         );
@@ -456,11 +521,13 @@ function WalletConnectStep({
   walletAddress,
   isConnecting,
   didStatus,
+  didErrorMessage,
   onConnect,
 }: {
   walletAddress: string | null;
   isConnecting: boolean;
   didStatus: DIDStatus;
+  didErrorMessage: string | null;
   onConnect: () => void;
 }) {
   return (
@@ -575,6 +642,20 @@ function WalletConnectStep({
             )}
 
 
+            {didStatus === 'found' && (
+              <div className="p-4 rounded-xl bg-rlusd-primary/5 border border-rlusd-primary/20">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-rlusd-primary shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-text-primary font-medium">DID Found</p>
+                    <p className="text-xs text-text-muted mt-1">
+                      Your wallet already has a DID associated with it. You can proceed with company information.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {didStatus === 'not-found' && (
               <div className="p-4 rounded-xl bg-accent-amber/5 border border-accent-amber/20">
                 <div className="flex items-start gap-3">
@@ -589,13 +670,15 @@ function WalletConnectStep({
               </div>
             )}
 
-            {didStatus === 'failed' && (
+            {didStatus === 'testnet_error' && (
               <div className="p-4 rounded-xl bg-accent-coral/5 border border-accent-coral/20">
                 <div className="flex items-start gap-3">
                   <AlertCircle className="w-5 h-5 text-accent-coral shrink-0 mt-0.5" />
                   <div>
-                    <p className="text-sm text-text-primary font-medium">DID check failed</p>
-                    <p className="text-xs text-text-muted mt-1">There was a network or verification error. Please try again.</p>
+                    <p className="text-sm text-text-primary font-medium">XRPL Testnet Error</p>
+                    <p className="text-xs text-text-muted mt-1">
+                      {didErrorMessage || 'Unable to verify DID on XRPL testnet. Please check your internet connection and try again.'}
+                    </p>
                     <div className="mt-3">
                       <motion.button
                         onClick={onConnect}
@@ -622,12 +705,14 @@ function DIDCompanyInfoStep({
   onChange,
   walletAddress,
   didStatus,
+  didErrorMessage,
   onCreateDID,
 }: {
   companyInfo: CompanyInfo;
   onChange: (field: keyof CompanyInfo, value: string) => void;
   walletAddress: string;
   didStatus: DIDStatus;
+  didErrorMessage: string | null;
   onCreateDID: () => void;
 }) {
   const canCreate = companyInfo.companyName && companyInfo.registrationNumber &&
@@ -779,6 +864,21 @@ function DIDCompanyInfoStep({
             />
           </div>
         </div>
+
+        {/* Error Display */}
+        {didStatus === 'failed' && (
+          <div className="p-4 rounded-xl bg-accent-coral/5 border border-accent-coral/20">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-accent-coral shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm text-text-primary font-medium">Failed to Create DID</p>
+                <p className="text-xs text-text-muted mt-1">
+                  {didErrorMessage || 'An error occurred while creating your DID. Please try again.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Create DID Button */}
         <motion.button
