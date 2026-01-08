@@ -8,24 +8,23 @@ import { Wallet } from 'xrpl';
 import { WalletConfig } from '@/types/waterfall';
 import { getWalletBalance, dropsToXRP, fundWalletDirectly } from '@/lib/xrpl/wallets';
 
-// REAL WALLET SECRETS - Updated 2026-01-08
-// Hook deployed successfully: TX 99B0C0AE95DB12D370CCEEE5CEE840CA5707EE9668FE8F3E4F2BCF8C6B17C770
-// Hook parameters:
-// - investor_address (hex): D787527815B1A26FD7AA5A50923F58315845DE55
-// - shipowner_address (hex): EC74A14E6D2D82A86298123F7EFB009B6A84CE2B
-// - investor_target: 000000001DCD6500 (500 XRP)
+// REAL WALLET SECRETS - Updated 2026-01-09
+// NEW Hook parameters (pending deployment):
+// - investor_address (hex): 4C331F5CB8D1631CE057C1B8A8DEE934A9EA1C45
+// - shipowner_address (hex): A210EFB8A838E721305B7F6372DE12266EA2145E
+// - investor_target: 000000001DCD6500 (500 XRP = 500,000,000 drops)
 export const REAL_WALLET_SECRETS = {
   platform: {
     address: 'rHC2GnCo9agZVhQMiGBF2dt4Ht5mpxzWnV',
     seed: 'sEdTk3FMu1ojhchiss2KXY8Uw71DMce',
   },
   investor: {
-    address: 'rLecPbHft8JmVMVb1gzBwKj6tWNZ7nuao3',
-    seed: 'sh4aB8cCKe1eZJifqA2G6y9hpSU2Y',
+    address: 'rfAubdjMQDwvQT3MTWYBowEXCJ1mv5CtgH',
+    seed: 'ss9qxCbKDozRbbCD7YremLM6LD9mp',
   },
   shipowner: {
-    address: 'r4ZGB1C8JB7KpckzfFXewzo7W9T8NF9q2g',
-    seed: 'spz3s87D3i8ntTEBPt6nxs8DAX9if',
+    address: 'rEmvkqC7U4KbXs7EZoQpU2vhCGEDrbEbz8',
+    seed: 'sheBHmpmqFJqB68HKDEKoLMmnLWat',
   },
   charterer: {
     address: 'rBucHbYrQkKNdWGqaLcS4gKELhkzrMCKKN',

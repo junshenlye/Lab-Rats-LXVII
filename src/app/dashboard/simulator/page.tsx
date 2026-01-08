@@ -37,11 +37,11 @@ export default function SimulatorPage() {
   const [setupStep, setSetupStep] = useState<'wallets' | 'terms' | 'ready'>('wallets');
   const [isGenerating, setIsGenerating] = useState(false);
 
-  // Wallet Secrets
-  const [chartererSecret, setChartererSecret] = useState('');
-  const [investorSecret, setInvestorSecret] = useState('');
-  const [shipownerSecret, setShipownerSecret] = useState('');
-  const [platformSecret, setPlatformSecret] = useState('');
+  // Wallet Secrets - Hardcoded from realWallets.ts
+  const [chartererSecret, setChartererSecret] = useState('sEdTYETVj89Vt8415esLEvqhRyXw516');
+  const [investorSecret, setInvestorSecret] = useState('ss9qxCbKDozRbbCD7YremLM6LD9mp');
+  const [shipownerSecret, setShipownerSecret] = useState('sheBHmpmqFJqB68HKDEKoLMmnLWat');
+  const [platformSecret, setPlatformSecret] = useState('sEdTk3FMu1ojhchiss2KXY8Uw71DMce');
   const [generatedWallets, setGeneratedWallets] = useState<{
     charterer: WalletConfig;
     investor: WalletConfig;
@@ -362,9 +362,15 @@ export default function SimulatorPage() {
                   <h2 className="font-display text-2xl font-semibold text-text-primary mb-2">
                     Configure Wallets
                   </h2>
-                  <p className="text-text-muted mb-6">
-                    Enter the secret keys for all 4 participants. Use XRPL testnet wallets only.
+                  <p className="text-text-muted mb-2">
+                    Wallet secrets are pre-filled from your configuration. You can modify them or generate new ones.
                   </p>
+                  <div className="flex items-center gap-2 p-3 rounded-lg bg-rlusd-primary/10 border border-rlusd-primary/30 mb-6">
+                    <CheckCircle2 className="w-4 h-4 text-rlusd-glow shrink-0" />
+                    <p className="text-sm text-rlusd-glow">
+                      Using wallets from realWallets.ts configuration
+                    </p>
+                  </div>
 
                   {/* Auto-Generate Button */}
                   <div className="mb-6">
@@ -492,6 +498,29 @@ export default function SimulatorPage() {
                       </p>
                     </div>
                   )}
+
+                  {/* Wallet Addresses Reference */}
+                  <div className="p-4 rounded-lg bg-maritime-slate/30 border border-white/10 mb-6">
+                    <h3 className="text-sm font-semibold text-text-primary mb-3">Pre-configured Wallet Addresses</h3>
+                    <div className="space-y-2 text-xs font-mono">
+                      <div className="flex justify-between items-center">
+                        <span className="text-text-muted">Platform:</span>
+                        <span className="text-text-primary">rHC2GnCo9agZVhQMiGBF2dt4Ht5mpxzWnV</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-text-muted">Investor:</span>
+                        <span className="text-text-primary">rfAubdjMQDwvQT3MTWYBowEXCJ1mv5CtgH</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-text-muted">Shipowner:</span>
+                        <span className="text-text-primary">rEmvkqC7U4KbXs7EZoQpU2vhCGEDrbEbz8</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-text-muted">Charterer:</span>
+                        <span className="text-text-primary">rBucHbYrQkKNdWGqaLcS4gKELhkzrMCKKN</span>
+                      </div>
+                    </div>
+                  </div>
 
                   <div className="flex items-center gap-2 p-4 rounded-lg bg-rlusd-primary/10 border border-rlusd-primary/30 mb-6">
                     <Shield className="w-5 h-5 text-rlusd-glow shrink-0" />

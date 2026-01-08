@@ -191,7 +191,7 @@ export type XRPToDrops = (xrp: number) => string;
 // Constants
 export const DROPS_PER_XRP = 1_000_000;
 export const XRPL_TESTNET_URL = 'wss://xahau-test.net';
-export const XRPL_TESTNET_EXPLORER = 'https://explorer.xahau-test.net';
+export const XRPL_TESTNET_EXPLORER = 'https://xahau-testnet.xrpl.org';
 export const XRPL_TESTNET_FAUCET = 'https://xahau-test.net';
 
 // Hook Constants

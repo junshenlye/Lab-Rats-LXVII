@@ -33,15 +33,16 @@ export async function getXRPLClient(): Promise<Client> {
       connectionTimeout: 30000,
     });
 
+    // Override the request method BEFORE connecting to ensure api_version: 1 for all requests
+    const originalRequest = client.request.bind(client);
+    (client as any).request = function(req: any) {
+      // Always inject api_version: 1 for Xahau Testnet
+      return originalRequest({ ...req, api_version: 1 });
+    };
+
     console.log('🔌 Connecting to Xahau Testnet...');
     await client.connect();
     console.log('✅ Connected to Xahau Testnet');
-
-    // Override the request method to always include api_version: 1
-    const originalRequest = client.request.bind(client);
-    (client as any).request = function(req: any) {
-      return originalRequest({ ...req, api_version: 1 });
-    };
 
     return client;
   } catch (error) {
