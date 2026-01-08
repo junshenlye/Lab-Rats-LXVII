@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { Ship, FileText, Navigation, DollarSign } from 'lucide-react';
+import { Ship, FileText, Navigation, Shield } from 'lucide-react';
 
 export default function Dashboard() {
   const navItems = [
@@ -31,12 +31,13 @@ export default function Dashboard() {
       iconColor: 'text-accent-violet',
     },
     {
-      title: 'Lending Pool',
-      description: 'Finance maritime operations',
-      icon: DollarSign,
-      href: '/dashboard/lending',
+      title: 'Waterfall Finance',
+      description: 'XRPL blockchain payment simulator',
+      icon: Shield,
+      href: '/dashboard/simulator',
       color: 'from-accent-amber to-accent-amber/80',
       iconColor: 'text-accent-amber',
+      badge: 'Live Demo',
     },
   ];
 
@@ -89,6 +90,13 @@ export default function Dashboard() {
 
                       {/* Corner accent */}
                       <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-white/5 to-transparent rounded-bl-[100px]" />
+
+                      {/* Badge */}
+                      {item.badge && (
+                        <div className="absolute top-4 right-4 px-2 py-1 rounded-full bg-rlusd-primary/20 border border-rlusd-primary/40">
+                          <span className="text-xs font-mono font-semibold text-rlusd-glow uppercase">{item.badge}</span>
+                        </div>
+                      )}
 
                       <div className="relative">
                         {/* Icon */}

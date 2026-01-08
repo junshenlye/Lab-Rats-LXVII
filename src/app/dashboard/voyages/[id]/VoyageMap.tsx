@@ -130,9 +130,7 @@ export default function VoyageMap({ voyage }: VoyageMapProps) {
   const mapRef = useRef<L.Map | null>(null);
 
   // Calculate bounds to fit entire route
-  const bounds: L.LatLngBoundsExpression = [
-    voyage.routeCoordinates.map((coord) => [coord[0], coord[1]] as [number, number]),
-  ];
+  const bounds: L.LatLngBoundsExpression = voyage.routeCoordinates.map((coord) => [coord[0], coord[1]] as [number, number]);
 
   // Current position or start position
   const shipPosition = voyage.currentPosition || voyage.origin.coordinates;
