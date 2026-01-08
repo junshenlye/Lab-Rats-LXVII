@@ -23,55 +23,77 @@ interface MapViewProps {
   selectedShip: string | null;
 }
 
-// Shipping routes (major trade routes)
+// Shipping routes (major trade routes) - Fixed to follow proper maritime paths
 const shippingRoutes = [
   {
-    name: 'Singapore - Rotterdam (Suez)',
+    name: 'Singapore - Rotterdam (Suez Canal)',
     coords: [
       [1.3521, 103.8198],  // Singapore
-      [13.0, 80.0],        // Bay of Bengal
-      [10.0, 73.0],        // Arabian Sea
-      [12.0, 43.3],        // Gulf of Aden
-      [30.0, 32.3],        // Suez Canal
-      [36.0, 12.0],        // Mediterranean
-      [43.0, -5.0],        // Bay of Biscay
+      [6.0, 95.0],         // Strait of Malacca
+      [8.0, 88.0],         // Bay of Bengal
+      [10.0, 77.0],        // Arabian Sea approach
+      [12.6, 43.3],        // Bab el Mandeb
+      [15.0, 42.0],        // Red Sea
+      [27.0, 34.0],        // Gulf of Suez
+      [30.5, 32.3],        // Suez Canal
+      [31.5, 31.0],        // Port Said
+      [35.0, 25.0],        // Eastern Mediterranean
+      [37.0, 15.0],        // Central Mediterranean
+      [38.0, 10.0],        // Strait of Sicily
+      [40.0, 5.0],         // Western Mediterranean
+      [43.5, -5.5],        // Strait of Gibraltar approach
+      [45.0, -8.0],        // Atlantic approach
       [51.9, 4.4]          // Rotterdam
     ],
     color: '#00d4aa'
   },
   {
-    name: 'Shanghai - Los Angeles (Pacific)',
+    name: 'Shanghai - Los Angeles (Trans-Pacific)',
     coords: [
       [31.2, 121.5],       // Shanghai
-      [35.0, 140.0],       // Pacific
-      [38.0, 170.0],       // North Pacific
-      [40.0, -160.0],      // North Pacific
-      [35.0, -130.0],      // Approach
+      [33.0, 135.0],       // East China Sea
+      [35.0, 150.0],       // Northwest Pacific
+      [37.0, 165.0],       // North Pacific
+      [39.0, 180.0],       // Date Line
+      [40.0, -175.0],      // Northeast Pacific
+      [38.0, -155.0],      // Hawaiian approach
+      [36.0, -140.0],      // Eastern Pacific
+      [34.0, -125.0],      // California approach
       [33.7, -118.2]       // Los Angeles
     ],
     color: '#38bdf8'
   },
   {
-    name: 'Hong Kong - Dubai',
+    name: 'Hong Kong - Dubai (Strait of Malacca)',
     coords: [
       [22.3, 114.2],       // Hong Kong
-      [20.0, 110.0],       // South China Sea
-      [15.0, 100.0],       // Thailand Gulf
-      [10.0, 90.0],        // Bay of Bengal
-      [12.0, 73.0],        // Arabian Sea
+      [18.0, 110.0],       // South China Sea
+      [10.0, 105.0],       // Gulf of Thailand
+      [5.0, 100.0],        // Strait of Malacca north
+      [2.0, 98.0],         // Strait of Malacca
+      [6.0, 92.0],         // Andaman Sea
+      [10.0, 85.0],        // Bay of Bengal
+      [12.0, 75.0],        // Arabian Sea
+      [15.0, 65.0],        // Arabian Sea approach
+      [20.0, 60.0],        // Gulf of Oman approach
       [25.2, 55.3]         // Dubai
     ],
     color: '#a78bfa'
   },
   {
-    name: 'Busan - New York (Panama)',
+    name: 'Busan - New York (Panama Canal)',
     coords: [
       [35.1, 129.0],       // Busan
-      [30.0, 140.0],       // Pacific
-      [25.0, -170.0],      // Central Pacific
-      [15.0, -120.0],      // Eastern Pacific
+      [30.0, 140.0],       // Northwest Pacific
+      [25.0, 155.0],       // Western Pacific
+      [20.0, 170.0],       // Central Pacific
+      [15.0, -175.0],      // South Pacific
+      [10.0, -150.0],      // Eastern Pacific
+      [9.5, -80.0],        // Panama Canal approach
       [9.0, -79.5],        // Panama Canal
-      [25.0, -75.0],       // Atlantic
+      [12.0, -78.0],       // Caribbean Sea
+      [20.0, -75.0],       // Northwest Atlantic
+      [30.0, -74.5],       // East Coast approach
       [40.7, -74.0]        // New York
     ],
     color: '#fbbf24'
@@ -98,7 +120,6 @@ function createShipMarkerIcon(status: Ship['status'], isSelected: boolean) {
   return L.divIcon({
     html: `
       <div style="position: relative; width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center;">
-        ${status === 'active' ? `<div style="position: absolute; width: 100%; height: 100%; border-radius: 50%; background: ${color}; opacity: 0.2; animation: pulse 2s ease-in-out infinite;"></div>` : ''}
         <div style="width: ${size - 8}px; height: ${size - 8}px; border-radius: 12px; background: linear-gradient(135deg, ${color}66, ${color}33); border: 2px solid ${color}; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 20px ${color}99;">
           <svg width="${size - 16}" height="${size - 16}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2">
             <path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
@@ -263,11 +284,15 @@ export default function MapView({ ships, selectedShip }: MapViewProps) {
         zoom={3}
         className="h-full w-full"
         zoomControl={true}
+        worldCopyJump={true}
+        maxBounds={[[-90, -Infinity], [90, Infinity]]}
+        maxBoundsViscosity={0.5}
         style={{ background: '#060a0f' }}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          noWrap={false}
         />
 
         {/* Shipping Routes */}
