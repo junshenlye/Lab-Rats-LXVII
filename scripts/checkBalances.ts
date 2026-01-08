@@ -8,8 +8,8 @@ const XAHAU_TESTNET = 'wss://xahau-test.net';
 
 const wallets = {
   platform: 'rHC2GnCo9agZVhQMiGBF2dt4Ht5mpxzWnV',
-  investor: 'rfAubdjMQDwvQT3MTWYBowEXCJ1mv5CtgH',
-  shipowner: 'rEmvkqC7U4KbXs7EZoQpU2vhCGEDrbEbz8',
+  investor: 'rNY8AoJuZu1CjqBxLqALnceMX7gKEqEwwZ',
+  shipowner: 'rDoSSCmbrNCmj4dYtUUmWAV8opaLmM8ZmG',
   charterer: 'rBucHbYrQkKNdWGqaLcS4gKELhkzrMCKKN',
 };
 

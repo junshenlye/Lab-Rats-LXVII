@@ -37,10 +37,10 @@ export default function SimulatorPage() {
   const [setupStep, setSetupStep] = useState<'wallets' | 'terms' | 'ready'>('wallets');
   const [isGenerating, setIsGenerating] = useState(false);
 
-  // Wallet Secrets - Hardcoded from realWallets.ts
+  // Wallet Secrets - Hardcoded from realWallets.ts (All Ed25519)
   const [chartererSecret, setChartererSecret] = useState('sEdTYETVj89Vt8415esLEvqhRyXw516');
-  const [investorSecret, setInvestorSecret] = useState('ss9qxCbKDozRbbCD7YremLM6LD9mp');
-  const [shipownerSecret, setShipownerSecret] = useState('sheBHmpmqFJqB68HKDEKoLMmnLWat');
+  const [investorSecret, setInvestorSecret] = useState('sEd7ZguPnUhwWXMzJJVTGfbMQ2Yjauc');
+  const [shipownerSecret, setShipownerSecret] = useState('sEd7YwJTAUCyrQiaNcGpVUhukrPZM38');
   const [platformSecret, setPlatformSecret] = useState('sEdTk3FMu1ojhchiss2KXY8Uw71DMce');
   const [generatedWallets, setGeneratedWallets] = useState<{
     charterer: WalletConfig;
@@ -501,7 +501,7 @@ export default function SimulatorPage() {
 
                   {/* Wallet Addresses Reference */}
                   <div className="p-4 rounded-lg bg-maritime-slate/30 border border-white/10 mb-6">
-                    <h3 className="text-sm font-semibold text-text-primary mb-3">Pre-configured Wallet Addresses</h3>
+                    <h3 className="text-sm font-semibold text-text-primary mb-3">Pre-configured Wallet Addresses (All Ed25519)</h3>
                     <div className="space-y-2 text-xs font-mono">
                       <div className="flex justify-between items-center">
                         <span className="text-text-muted">Platform:</span>
@@ -509,11 +509,11 @@ export default function SimulatorPage() {
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-text-muted">Investor:</span>
-                        <span className="text-text-primary">rfAubdjMQDwvQT3MTWYBowEXCJ1mv5CtgH</span>
+                        <span className="text-text-primary">rNY8AoJuZu1CjqBxLqALnceMX7gKEqEwwZ</span>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-text-muted">Shipowner:</span>
-                        <span className="text-text-primary">rEmvkqC7U4KbXs7EZoQpU2vhCGEDrbEbz8</span>
+                        <span className="text-text-primary">rDoSSCmbrNCmj4dYtUUmWAV8opaLmM8ZmG</span>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-text-muted">Charterer:</span>

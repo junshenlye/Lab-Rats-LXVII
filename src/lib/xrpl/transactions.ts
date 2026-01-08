@@ -58,9 +58,14 @@ export async function submitTransaction(
     amount: dropsToXRP(payment.Amount as string),
   });
 
+  // Use much higher fee for Xahau testnet to avoid telINSUF_FEE_P errors
+  // Network is congested, need higher fee priority and longer validation window
   const response = await client.submitAndWait(payment, {
     wallet: xrplWallet,
-    autofill: true,
+    autofill: {
+      maxLedgerVersionOffset: 20, // Allow 20 ledgers (~1 minute) for validation instead of default 3
+    },
+    fee: '1000', // Significantly increased fee (0.001 XRP) to ensure fast validation
   } as any); // Xahau Testnet - submitAndWait will use api_version: 1 from requests
 
   console.log('✅ Transaction confirmed:', response.result.hash);

@@ -90,11 +90,11 @@ export default function CreateVoyagePage() {
   const totalSteps = 6;
 
   // Form state
-  const [vesselName, setVesselName] = useState('');
-  const [vesselIMO, setVesselIMO] = useState('');
+  const [vesselName, setVesselName] = useState('MV Ocean Titan');
+  const [vesselIMO, setVesselIMO] = useState('IMO 9234567');
   const [vesselType, setVesselType] = useState('Container Ship');
-  const [shipownerName, setShipownerName] = useState('');
-  const [shipownerCompany, setShipownerCompany] = useState('');
+  const [shipownerName, setShipownerName] = useState('Blue Horizon Shipping Ltd.');
+  const [shipownerCompany, setShipownerCompany] = useState('Blue Horizon Maritime Group');
   const [chartererName, setChartererName] = useState('');
   const [chartererCompany, setChartererCompany] = useState('');
 
@@ -109,8 +109,6 @@ export default function CreateVoyagePage() {
   const [customMilestones, setCustomMilestones] = useState<{ name: string; description: string }[]>([]);
 
   const [contractValue, setContractValue] = useState('');
-  const [currency, setCurrency] = useState<'USD' | 'RLUSD'>('RLUSD');
-  const [terScore, setTerScore] = useState('');
 
   const steps = [
     { number: 1, title: 'Vessel & Parties', icon: Ship },
@@ -284,8 +282,7 @@ export default function CreateVoyagePage() {
       milestonesCompleted: 0,
       milestonesTotal: autoMilestones.length,
       contractValue: parseFloat(contractValue),
-      currency,
-      terScore: terScore ? parseInt(terScore) : undefined,
+      currency: 'RLUSD',
       invoiceIds: [],
       createdAt: now,
       updatedAt: now,
@@ -436,39 +433,48 @@ export default function CreateVoyagePage() {
 
                     <div className="grid grid-cols-2 gap-6">
                       <div>
-                        <label className="block text-sm font-mono text-text-muted uppercase mb-2">
+                        <label className="flex items-center gap-2 text-sm font-mono text-text-muted uppercase mb-2">
                           Vessel Name *
+                          <span className="px-2 py-0.5 bg-accent-sky/10 text-accent-sky text-xs rounded-full border border-accent-sky/30 animate-pulse-glow">
+                            Sample
+                          </span>
                         </label>
                         <input
                           type="text"
                           value={vesselName}
                           onChange={(e) => setVesselName(e.target.value)}
-                          className="w-full px-4 py-3 bg-maritime-dark/50 border border-white/10 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-colors"
+                          className="w-full px-4 py-3 bg-maritime-dark/50 border border-accent-sky/20 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-all duration-300 focus:bg-maritime-dark/70"
                           placeholder="e.g., MV Pacific Meridian"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-sm font-mono text-text-muted uppercase mb-2">
+                        <label className="flex items-center gap-2 text-sm font-mono text-text-muted uppercase mb-2">
                           IMO Number
+                          <span className="px-2 py-0.5 bg-accent-sky/10 text-accent-sky text-xs rounded-full border border-accent-sky/30 animate-pulse-glow">
+                            Sample
+                          </span>
                         </label>
                         <input
                           type="text"
                           value={vesselIMO}
                           onChange={(e) => setVesselIMO(e.target.value)}
-                          className="w-full px-4 py-3 bg-maritime-dark/50 border border-white/10 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-colors"
+                          className="w-full px-4 py-3 bg-maritime-dark/50 border border-accent-sky/20 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-all duration-300 focus:bg-maritime-dark/70"
                           placeholder="e.g., IMO 9234567"
                         />
                       </div>
 
                       <div className="col-span-2">
-                        <label className="block text-sm font-mono text-text-muted uppercase mb-2">
+                        <label className="flex items-center gap-2 text-sm font-mono text-text-muted uppercase mb-2">
                           Vessel Type
+                          <span className="px-2 py-0.5 bg-accent-sky/10 text-accent-sky text-xs rounded-full border border-accent-sky/30 animate-pulse-glow">
+                            Sample
+                          </span>
                         </label>
                         <select
                           value={vesselType}
                           onChange={(e) => setVesselType(e.target.value)}
-                          className="w-full px-4 py-3 bg-maritime-dark/50 border border-white/10 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-colors"
+                          className="w-full px-4 py-3 bg-maritime-dark/50 border border-accent-sky/20 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-all duration-300"
                         >
                           <option>Container Ship</option>
                           <option>Bulk Carrier</option>
@@ -479,6 +485,23 @@ export default function CreateVoyagePage() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Clear Sample Data Button */}
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => {
+                      setVesselName('');
+                      setVesselIMO('');
+                      setVesselType('Container Ship');
+                      setShipownerName('');
+                      setShipownerCompany('');
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 bg-maritime-steel/40 hover:bg-maritime-steel/60 border border-white/10 hover:border-accent-coral/40 rounded-lg text-text-muted hover:text-accent-coral font-mono text-sm uppercase transition-all duration-300"
+                  >
+                    <X className="w-4 h-4" />
+                    Clear Sample Data
+                  </motion.button>
 
                   {/* Parties */}
                   <div className="grid grid-cols-2 gap-6">
@@ -491,23 +514,33 @@ export default function CreateVoyagePage() {
 
                       <div className="space-y-4">
                         <div>
-                          <label className="block text-sm font-mono text-text-muted uppercase mb-2">Name *</label>
+                          <label className="flex items-center gap-2 text-sm font-mono text-text-muted uppercase mb-2">
+                            Name *
+                            <span className="px-2 py-0.5 bg-accent-sky/10 text-accent-sky text-xs rounded-full border border-accent-sky/30 animate-pulse-glow">
+                              Sample
+                            </span>
+                          </label>
                           <input
                             type="text"
                             value={shipownerName}
                             onChange={(e) => setShipownerName(e.target.value)}
-                            className="w-full px-4 py-3 bg-maritime-dark/50 border border-white/10 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-colors"
+                            className="w-full px-4 py-3 bg-maritime-dark/50 border border-accent-sky/20 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-all duration-300 focus:bg-maritime-dark/70"
                             placeholder="John Smith"
                           />
                         </div>
 
                         <div>
-                          <label className="block text-sm font-mono text-text-muted uppercase mb-2">Company</label>
+                          <label className="flex items-center gap-2 text-sm font-mono text-text-muted uppercase mb-2">
+                            Company
+                            <span className="px-2 py-0.5 bg-accent-sky/10 text-accent-sky text-xs rounded-full border border-accent-sky/30 animate-pulse-glow">
+                              Sample
+                            </span>
+                          </label>
                           <input
                             type="text"
                             value={shipownerCompany}
                             onChange={(e) => setShipownerCompany(e.target.value)}
-                            className="w-full px-4 py-3 bg-maritime-dark/50 border border-white/10 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-colors"
+                            className="w-full px-4 py-3 bg-maritime-dark/50 border border-accent-sky/20 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-all duration-300 focus:bg-maritime-dark/70"
                             placeholder="Blue Horizon Shipping"
                           />
                         </div>
@@ -765,47 +798,42 @@ export default function CreateVoyagePage() {
                     </div>
 
                     <div className="space-y-6">
-                      <div className="grid grid-cols-2 gap-6">
-                        <div>
-                          <label className="block text-sm font-mono text-text-muted uppercase mb-2">
-                            Contract Value *
-                          </label>
+                      <div className="relative group">
+                        <label className="flex items-center gap-2 text-sm font-mono text-text-muted uppercase mb-2">
+                          Contract Value *
+                          <span className="px-2 py-0.5 bg-rlusd-primary/10 text-rlusd-glow text-xs rounded-full border border-rlusd-primary/30">
+                            RLUSD Only
+                          </span>
+                        </label>
+                        <div className="relative">
+                          {/* RLUSD Badge - Always visible inside input */}
+                          <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2 pointer-events-none">
+                            <div className="w-2 h-2 rounded-full bg-rlusd-glow animate-pulse-glow"></div>
+                            <span className="font-mono font-bold text-rlusd-glow">RLUSD</span>
+                          </div>
+
                           <input
                             type="number"
                             value={contractValue}
                             onChange={(e) => setContractValue(e.target.value)}
-                            className="w-full px-4 py-3 bg-maritime-dark/50 border border-white/10 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-colors"
+                            className="w-full pl-28 pr-4 py-4 bg-maritime-dark/50 border-2 border-rlusd-primary/30 rounded-lg text-text-primary font-mono text-xl focus:border-rlusd-primary focus:outline-none focus:shadow-glow-md transition-all duration-300"
                             placeholder="850000"
                           />
                         </div>
 
-                        <div>
-                          <label className="block text-sm font-mono text-text-muted uppercase mb-2">Currency</label>
-                          <select
-                            value={currency}
-                            onChange={(e) => setCurrency(e.target.value as 'USD' | 'RLUSD')}
-                            className="w-full px-4 py-3 bg-maritime-dark/50 border border-white/10 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-colors"
+                        {/* Value preview with formatting */}
+                        {contractValue && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="mt-3 p-3 bg-rlusd-primary/5 border border-rlusd-primary/20 rounded-lg"
                           >
-                            <option value="RLUSD">RLUSD</option>
-                            <option value="USD">USD</option>
-                          </select>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-mono text-text-muted uppercase mb-2">
-                          TER Score (Optional)
-                        </label>
-                        <input
-                          type="number"
-                          value={terScore}
-                          onChange={(e) => setTerScore(e.target.value)}
-                          className="w-full px-4 py-3 bg-maritime-dark/50 border border-white/10 rounded-lg text-text-primary font-mono focus:border-rlusd-primary focus:outline-none transition-colors"
-                          placeholder="847"
-                          min="650"
-                          max="950"
-                        />
-                        <p className="mt-2 text-xs font-mono text-text-muted">Transportation Equity Rating (650-950)</p>
+                            <p className="text-sm font-mono text-text-muted">Contract Total</p>
+                            <p className="text-2xl font-display font-bold text-rlusd-glow">
+                              RLUSD ${parseFloat(contractValue).toLocaleString()}
+                            </p>
+                          </motion.div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -882,13 +910,19 @@ export default function CreateVoyagePage() {
                       {/* Financial */}
                       <div>
                         <h3 className="text-sm font-mono text-text-muted uppercase mb-3">Financial</h3>
-                        <div className="p-4 bg-rlusd-primary/10 rounded-lg border border-rlusd-primary/30">
-                          <p className="text-2xl font-display font-bold text-rlusd-glow">
-                            {currency} ${parseFloat(contractValue).toLocaleString()}
-                          </p>
-                          {terScore && (
-                            <p className="text-sm font-mono text-text-muted mt-1">TER Score: {terScore}</p>
-                          )}
+                        <div className="relative overflow-hidden">
+                          {/* Animated background glow */}
+                          <div className="absolute inset-0 bg-gradient-to-br from-rlusd-primary/5 via-rlusd-glow/10 to-rlusd-primary/5 animate-shimmer"></div>
+
+                          <div className="relative p-6 rounded-xl border-2 border-rlusd-primary/40">
+                            <div className="flex items-center gap-3 mb-2">
+                              <div className="w-3 h-3 rounded-full bg-rlusd-glow animate-pulse-glow"></div>
+                              <span className="text-xs font-mono text-text-muted uppercase tracking-wider">Contract Value</span>
+                            </div>
+                            <p className="text-3xl font-display font-bold text-rlusd-glow">
+                              RLUSD ${parseFloat(contractValue).toLocaleString()}
+                            </p>
+                          </div>
                         </div>
                       </div>
 
