@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Ship,
   FileText,
@@ -13,13 +13,31 @@ import {
   Loader2,
   FileCheck,
   AlertCircle,
+  Split,
+  FileStack,
 } from 'lucide-react';
+import { Voyage, VoyageInvoice, STORAGE_KEYS } from '@/types/voyage';
 
 export default function CreateInvoicePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const voyageId = searchParams.get('voyageId');
+
+  const [voyage, setVoyage] = useState<Voyage | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [ocrData, setOcrData] = useState<any>(null);
+  const [invoiceType, setInvoiceType] = useState<'single' | 'multiple' | null>(null);
+
+  // Load voyage if voyageId is provided
+  useEffect(() => {
+    if (voyageId) {
+      const voyageData = localStorage.getItem(STORAGE_KEYS.voyage(voyageId));
+      if (voyageData) {
+        setVoyage(JSON.parse(voyageData));
+      }
+    }
+  }, [voyageId]);
 
   // Simulated OCR processing
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -31,50 +49,174 @@ export default function CreateInvoicePage() {
 
     // Simulate OCR processing delay
     setTimeout(() => {
-      // Mock OCR extracted data
-      setOcrData({
-        invoiceNumber: 'INV-2026-001',
-        date: '2026-01-08',
+      // Mock OCR extracted data - use voyage context if available
+      const baseData = {
+        invoiceNumber: `INV-${Date.now().toString().slice(-6)}`,
+        date: new Date().toISOString().split('T')[0],
         dueDate: 'Upon Receipt',
-        shipowner: {
-          name: 'Blue Horizon Shipping Ltd.',
-          address: '12 Maritime Plaza, Singapore',
-          contact: 'operations@bluehorizon.com',
-          vessel: 'MV Ocean Titan',
-          voyageNo: 'OT-202B'
-        },
-        charterer: {
-          name: 'Global Commodities Corp.',
-          address: '4500 Park Avenue, New York, NY',
-          contact: 'accounts@globalcomm.com'
-        },
         lineItems: [
-          { description: 'Lumpsum Freight (Port A to Port B)', quantity: 1, rate: 45000, total: 45000 },
-          { description: 'Demurrage Fees (2 Days at Port A)', quantity: 2, rate: 1500, total: 3000 },
+          { description: 'Lumpsum Freight', quantity: 1, rate: 45000, total: 45000 },
+          { description: 'Demurrage Fees', quantity: 2, rate: 1500, total: 3000 },
           { description: 'Bunker Adjustment Factor (BAF)', quantity: 1, rate: 2200, total: 2200 }
         ],
         subtotal: 50200,
         discount: 502,
-        discountLabel: 'Blockchain Payment (1%)',
+        discountLabel: 'RLUSD Payment Discount (1%)',
         grandTotal: 49698
-      });
+      };
+
+      if (voyage) {
+        // Auto-fill from voyage context
+        setOcrData({
+          ...baseData,
+          shipowner: {
+            name: voyage.shipownerName,
+            company: voyage.shipownerCompany || '',
+            address: '',
+            contact: '',
+            vessel: voyage.vesselName,
+            voyageNo: voyage.voyageNumber,
+            did: `did:xrpl:1:${Math.random().toString(36).substring(2, 15)}`,
+            walletAddress: `r${Math.random().toString(36).substring(2, 15).toUpperCase()}${Math.random().toString(36).substring(2, 15).toUpperCase()}`
+          },
+          charterer: {
+            name: voyage.chartererName,
+            company: voyage.chartererCompany || '',
+            address: '',
+            contact: '',
+            did: `did:xrpl:1:${Math.random().toString(36).substring(2, 15)}`,
+            walletAddress: `r${Math.random().toString(36).substring(2, 15).toUpperCase()}${Math.random().toString(36).substring(2, 15).toUpperCase()}`
+          },
+          route: voyage.routeName,
+          vessel: voyage.vesselName,
+          voyageNumber: voyage.voyageNumber,
+        });
+      } else {
+        // Standalone invoice
+        setOcrData({
+          ...baseData,
+          shipowner: {
+            name: 'Blue Horizon Shipping Ltd.',
+            address: '12 Maritime Plaza, Singapore',
+            contact: 'operations@bluehorizon.com',
+            vessel: 'MV Ocean Titan',
+            voyageNo: 'OT-202B',
+            did: 'did:xrpl:1:bluehorizon7x9k2m',
+            walletAddress: 'rN7n7otQDd6FczFgLdWqHfcH4rrFLkYUZL'
+          },
+          charterer: {
+            name: 'Global Commodities Corp.',
+            address: '4500 Park Avenue, New York, NY',
+            contact: 'accounts@globalcomm.com',
+            did: 'did:xrpl:1:globalcomm5p8w3n',
+            walletAddress: 'rPEPPER7kfTD9w2To4CQk6UCfuHM9c6GDY'
+          },
+        });
+      }
       setIsProcessing(false);
     }, 2000);
   };
 
-  const handleCreateInvoice = () => {
-    // Store invoice data in localStorage for demo
-    if (ocrData) {
-      const invoiceId = 'inv-' + Date.now();
-      localStorage.setItem(invoiceId, JSON.stringify({
+  const handleCreateInvoice = (type: 'single' | 'multiple') => {
+    if (!ocrData) return;
+
+    if (type === 'single') {
+      // Create single invoice with milestone references
+      const invoiceId = `inv-${Date.now()}`;
+      const voyageInvoice: any = {
         ...ocrData,
         id: invoiceId,
         status: 'pending',
         createdAt: new Date().toISOString(),
-        paymentLink: `/dashboard/invoices/pay/${invoiceId}`
-      }));
+        paymentLink: `/dashboard/invoices/pay/${invoiceId}`,
+        voyageId: voyage?.id,
+        voyageNumber: voyage?.voyageNumber,
+        milestoneReferences: voyage?.milestones.map(m => ({
+          milestoneId: m.id,
+          milestoneName: m.name,
+          milestoneStatus: m.status,
+          amount: 0, // Distribute grandTotal across milestones if needed
+          description: `Milestone: ${m.name}`
+        }))
+      };
 
-      // Redirect to invoices list
+      // Save with the appropriate key based on whether it's linked to a voyage
+      const storageKey = voyage ? STORAGE_KEYS.voyageInvoice(invoiceId) : invoiceId;
+
+      console.log('💾 Saving invoice:', {
+        invoiceId,
+        storageKey,
+        hasVoyage: !!voyage,
+        invoice: voyageInvoice
+      });
+
+      localStorage.setItem(storageKey, JSON.stringify(voyageInvoice));
+
+      // Verify it was saved
+      const saved = localStorage.getItem(storageKey);
+      console.log('✅ Invoice saved verification:', saved ? 'Success' : 'Failed');
+
+      // Update voyage with invoice reference
+      if (voyage) {
+        voyage.invoiceIds.push(invoiceId);
+        localStorage.setItem(STORAGE_KEYS.voyage(voyage.id), JSON.stringify(voyage));
+      }
+
+      router.push('/dashboard/invoices');
+    } else {
+      // Create multiple invoices (one per milestone)
+      const verifiedMilestones = voyage?.milestones.filter(m => m.requiresVerification) || [];
+      const amountPerMilestone = Math.floor(ocrData.grandTotal / verifiedMilestones.length);
+
+      verifiedMilestones.forEach((milestone, index) => {
+        const invoiceId = `inv-${Date.now()}-${index}`;
+        const isLast = index === verifiedMilestones.length - 1;
+        const amount = isLast
+          ? ocrData.grandTotal - (amountPerMilestone * (verifiedMilestones.length - 1))
+          : amountPerMilestone;
+
+        const voyageInvoice: any = {
+          ...ocrData,
+          id: invoiceId,
+          invoiceNumber: `${ocrData.invoiceNumber}-M${index + 1}`,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          paymentLink: `/dashboard/invoices/pay/${invoiceId}`,
+          voyageId: voyage?.id,
+          voyageNumber: voyage?.voyageNumber,
+          lineItems: [
+            {
+              description: `Freight - ${milestone.name}`,
+              quantity: 1,
+              rate: amount,
+              total: amount,
+              milestoneId: milestone.id
+            }
+          ],
+          subtotal: amount,
+          discount: 0,
+          grandTotal: amount,
+          milestoneReferences: [{
+            milestoneId: milestone.id,
+            milestoneName: milestone.name,
+            milestoneStatus: milestone.status,
+            amount: amount,
+            description: `Payment for ${milestone.name}`
+          }]
+        };
+
+        localStorage.setItem(STORAGE_KEYS.voyageInvoice(invoiceId), JSON.stringify(voyageInvoice));
+
+        // Update voyage with invoice reference
+        if (voyage) {
+          voyage.invoiceIds.push(invoiceId);
+        }
+      });
+
+      if (voyage) {
+        localStorage.setItem(STORAGE_KEYS.voyage(voyage.id), JSON.stringify(voyage));
+      }
+
       router.push('/dashboard/invoices');
     }
   };
@@ -86,18 +228,26 @@ export default function CreateInvoicePage() {
         <div className="px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Link href="/dashboard/invoices">
+              <Link href={voyage ? `/dashboard/voyages/${voyage.id}` : "/dashboard/invoices"}>
                 <button className="p-2 hover:bg-maritime-slate/30 rounded-lg transition-colors">
                   <ArrowLeft className="w-5 h-5 text-text-muted" />
                 </button>
               </Link>
               <div>
                 <h1 className="font-display text-xl font-semibold text-text-primary">
-                  Create Invoice
+                  {voyage ? 'Create Invoice from Voyage' : 'Create Invoice'}
                 </h1>
-                <p className="text-xs text-text-muted">Upload freight invoice document</p>
+                <p className="text-xs text-text-muted">
+                  {voyage ? `For ${voyage.vesselName} - ${voyage.voyageNumber}` : 'Upload freight invoice document'}
+                </p>
               </div>
             </div>
+            {voyage && (
+              <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-rlusd-primary/10 border border-rlusd-primary/30">
+                <Ship className="w-4 h-4 text-rlusd-glow" />
+                <span className="text-sm font-mono text-text-primary">{voyage.routeName}</span>
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -198,9 +348,11 @@ export default function CreateInvoicePage() {
                       <p className="font-semibold text-text-primary mb-1">{ocrData.shipowner.name}</p>
                       <p className="text-sm text-text-muted mb-1">{ocrData.shipowner.address}</p>
                       <p className="text-sm text-text-muted">{ocrData.shipowner.contact}</p>
-                      <div className="mt-3 pt-3 border-t border-white/5">
+                      <div className="mt-3 pt-3 border-t border-white/5 space-y-1">
                         <p className="text-xs text-text-muted">Vessel: <span className="text-text-primary font-mono">{ocrData.shipowner.vessel}</span></p>
                         <p className="text-xs text-text-muted">Voyage: <span className="text-text-primary font-mono">{ocrData.shipowner.voyageNo}</span></p>
+                        <p className="text-xs text-text-muted">DID: <span className="text-accent-sky font-mono text-[10px]">{ocrData.shipowner.did}</span></p>
+                        <p className="text-xs text-text-muted">Wallet: <span className="text-rlusd-glow font-mono text-[10px]">{ocrData.shipowner.walletAddress}</span></p>
                       </div>
                     </div>
 
@@ -209,6 +361,10 @@ export default function CreateInvoicePage() {
                       <p className="font-semibold text-text-primary mb-1">{ocrData.charterer.name}</p>
                       <p className="text-sm text-text-muted mb-1">{ocrData.charterer.address}</p>
                       <p className="text-sm text-text-muted">{ocrData.charterer.contact}</p>
+                      <div className="mt-3 pt-3 border-t border-white/5 space-y-1">
+                        <p className="text-xs text-text-muted">DID: <span className="text-accent-sky font-mono text-[10px]">{ocrData.charterer.did}</span></p>
+                        <p className="text-xs text-text-muted">Wallet: <span className="text-rlusd-glow font-mono text-[10px]">{ocrData.charterer.walletAddress}</span></p>
+                      </div>
                     </div>
                   </div>
 
@@ -256,24 +412,66 @@ export default function CreateInvoicePage() {
                   </div>
                 </div>
 
+                {/* Invoice Type Selection (for voyage-linked invoices) */}
+                {voyage && !invoiceType && (
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-sm text-text-muted mb-4">Choose how to structure the invoice:</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <button
+                          onClick={() => setInvoiceType('single')}
+                          className="p-6 rounded-xl border-2 border-white/10 hover:border-rlusd-primary/50 hover:bg-rlusd-primary/5 transition-all group text-left"
+                        >
+                          <FileText className="w-8 h-8 text-rlusd-glow mb-3" />
+                          <h3 className="font-display text-lg font-semibold text-text-primary mb-2">
+                            Single Invoice
+                          </h3>
+                          <p className="text-sm text-text-muted">
+                            One invoice with all line items and milestone references for transparency
+                          </p>
+                        </button>
+
+                        <button
+                          onClick={() => setInvoiceType('multiple')}
+                          className="p-6 rounded-xl border-2 border-white/10 hover:border-rlusd-primary/50 hover:bg-rlusd-primary/5 transition-all group text-left"
+                        >
+                          <FileStack className="w-8 h-8 text-accent-sky mb-3" />
+                          <h3 className="font-display text-lg font-semibold text-text-primary mb-2">
+                            Multiple Invoices
+                          </h3>
+                          <p className="text-sm text-text-muted">
+                            Separate invoice for each milestone ({voyage.milestones.filter(m => m.requiresVerification).length} invoices)
+                          </p>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Actions */}
-                <div className="flex items-center gap-4">
-                  <button
-                    onClick={() => {
-                      setOcrData(null);
-                      setUploadedFile(null);
-                    }}
-                    className="flex-1 px-6 py-3 rounded-xl border border-white/10 text-text-primary font-medium hover:bg-maritime-slate/30 transition-all"
-                  >
-                    Upload Different Invoice
-                  </button>
-                  <button
-                    onClick={handleCreateInvoice}
-                    className="flex-1 px-6 py-3 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white font-medium hover:shadow-glow-md transition-all"
-                  >
-                    Create Invoice & Get Payment Link
-                  </button>
-                </div>
+                {(!voyage || invoiceType) && (
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={() => {
+                        setOcrData(null);
+                        setUploadedFile(null);
+                        setInvoiceType(null);
+                      }}
+                      className="flex-1 px-6 py-3 rounded-xl border border-white/10 text-text-primary font-medium hover:bg-maritime-slate/30 transition-all"
+                    >
+                      {voyage && invoiceType ? 'Back to Type Selection' : 'Upload Different Invoice'}
+                    </button>
+                    <button
+                      onClick={() => voyage ? handleCreateInvoice(invoiceType!) : handleCreateInvoice('single')}
+                      className="flex-1 px-6 py-3 rounded-xl bg-gradient-to-r from-rlusd-dim to-rlusd-primary text-white font-medium hover:shadow-glow-md transition-all"
+                    >
+                      {voyage && invoiceType === 'multiple'
+                        ? `Create ${voyage.milestones.filter(m => m.requiresVerification).length} Invoices`
+                        : 'Create Invoice & Get Payment Link'
+                      }
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </motion.div>

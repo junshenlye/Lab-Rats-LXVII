@@ -11,12 +11,16 @@ import {
   Copy,
   CheckCircle2,
   Clock,
+  Navigation,
+  Target,
 } from 'lucide-react';
+import { STORAGE_KEYS } from '@/types/voyage';
 
 export default function InvoicesPage() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [invoices, setInvoices] = useState<any[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [filterVoyage, setFilterVoyage] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -27,21 +31,59 @@ export default function InvoicesPage() {
     // Load invoices from localStorage
     const loadInvoices = () => {
       const allInvoices = [];
+
+      // Load voyage invoices
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key?.startsWith('inv-')) {
+        if (key?.startsWith('voyage-invoice-')) {
           const data = localStorage.getItem(key);
           if (data) {
             allInvoices.push(JSON.parse(data));
           }
         }
       }
+
+      // Load regular invoices (fallback)
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key?.startsWith('inv-') && !key.startsWith('invoice-')) {
+          const data = localStorage.getItem(key);
+          if (data) {
+            const invoice = JSON.parse(data);
+            // Only add if not already loaded as voyage invoice
+            if (!allInvoices.find(inv => inv.id === invoice.id)) {
+              allInvoices.push(invoice);
+            }
+          }
+        }
+      }
+
       // Sort by creation date, newest first
       allInvoices.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setInvoices(allInvoices);
     };
 
     loadInvoices();
+
+    // Add event listener for when the page becomes visible (user navigates back)
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        loadInvoices();
+      }
+    };
+
+    // Add event listener for focus (when user returns to the tab/window)
+    const handleFocus = () => {
+      loadInvoices();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, []);
 
   const copyPaymentLink = (invoiceId: string) => {
@@ -237,14 +279,27 @@ export default function InvoicesPage() {
                   >
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
                           <h3 className="font-display text-lg font-semibold text-text-primary">
                             Invoice #{invoice.invoiceNumber}
                           </h3>
+
+                          {/* Voyage Badge */}
+                          {invoice.voyageId && invoice.voyageNumber && (
+                            <Link
+                              href={`/dashboard/voyages/${invoice.voyageId}`}
+                              className="px-2 py-1 rounded bg-accent-sky/20 border border-accent-sky/30 text-xs font-mono text-accent-sky hover:bg-accent-sky/30 transition-colors flex items-center gap-1"
+                            >
+                              <Navigation className="w-3 h-3" />
+                              {invoice.voyageNumber}
+                            </Link>
+                          )}
+
+                          {/* Payment Status */}
                           <div className={`px-3 py-1 rounded-full text-xs font-medium ${
                             invoice.status === 'paid'
                               ? 'bg-rlusd-primary/20 text-rlusd-glow border border-rlusd-primary/30'
-                              : 'bg-accent-sky/20 text-accent-sky border border-accent-sky/30'
+                              : 'bg-accent-amber/20 text-accent-amber border border-accent-amber/30'
                           }`}>
                             {invoice.status === 'paid' ? (
                               <span className="flex items-center gap-1">
@@ -259,9 +314,25 @@ export default function InvoicesPage() {
                             )}
                           </div>
                         </div>
-                        <p className="text-sm text-text-muted">
-                          {invoice.shipowner.vessel} • Voyage {invoice.shipowner.voyageNo}
-                        </p>
+
+                        <div className="flex items-center gap-2 text-sm text-text-muted">
+                          <span>{invoice.shipowner.vessel}</span>
+                          {invoice.voyageNumber && (
+                            <>
+                              <span>•</span>
+                              <span className="font-mono">{invoice.voyageNumber}</span>
+                            </>
+                          )}
+                          {invoice.milestoneReferences && invoice.milestoneReferences.length > 0 && (
+                            <>
+                              <span>•</span>
+                              <span className="flex items-center gap-1 text-xs">
+                                <Target className="w-3 h-3" />
+                                {invoice.milestoneReferences.filter((m: any) => m.milestoneStatus === 'verified').length}/{invoice.milestoneReferences.length} verified
+                              </span>
+                            </>
+                          )}
+                        </div>
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-mono font-bold text-rlusd-glow">
