@@ -56,7 +56,7 @@ function buildOrderedMemo(memo: TerMemo): TerMemo {
       ordered[key] = orderedRates(memo.rates) as TerMemo[typeof key];
       continue;
     }
-    ordered[key] = memo[key];
+    (ordered as any)[key] = memo[key];
   }
   return ordered;
 }
@@ -76,7 +76,7 @@ export function validateTerMemo(memo: unknown): { ok: boolean; error?: string } 
     }
   }
 
-  const memoRecord = memo as TerMemo;
+  const memoRecord = memo as unknown as TerMemo;
 
   if (!Array.isArray(memoRecord.settlement_refs)) {
     return { ok: false, error: 'settlement_refs must be an array' };

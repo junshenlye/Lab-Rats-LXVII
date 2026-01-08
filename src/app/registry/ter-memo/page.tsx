@@ -177,105 +177,148 @@ function MemoVisualizer() {
   const prettyJson = ordered ? JSON.stringify(ordered, null, 2) : null;
 
   return (
-    <div className="h-[70vh] flex flex-col gap-4">
-      <div className="space-y-3">
-        <div className="space-y-1">
-          <p className="text-xs text-text-muted">Registry DID</p>
+    <div className="flex flex-col gap-0 font-mono text-xs bg-gradient-to-b from-white/[0.02] to-transparent">
+      {/* Top Control Section */}
+      <div className="border-b border-white/10 p-4 space-y-3 bg-gradient-to-b from-white/[0.02] to-transparent">
+        {/* DID Filter */}
+        <div>
+          <label className="text-[9px] text-white/50 uppercase tracking-widest block mb-2">Registry DID</label>
           <select
             value={selectedDid}
             onChange={event => {
               setSelectedDid(event.target.value);
             }}
-            className="w-full rounded-lg border border-white/10 bg-maritime-slate/20 px-3 py-2 text-xs text-text-primary"
+            className="w-full bg-white/[0.08] hover:bg-white/[0.12] border border-white/15 rounded px-3 py-2 text-xs text-text-primary focus:outline-none focus:border-white/30 focus:ring-1 focus:ring-white/10 transition-all"
             disabled={!didOptions.length}
           >
             {didOptions.length ? (
               didOptions.map(option => (
-                <option key={option} value={option} className="text-black">
+                <option key={option} value={option} className="bg-maritime-dark">
                   {option}
                 </option>
               ))
             ) : (
-              <option value="" className="text-black">
-                No DIDs available
+              <option value="" className="bg-maritime-dark">
+                Scanning ledger...
               </option>
             )}
           </select>
         </div>
-        <div className="flex items-center justify-between rounded-lg border border-white/10 bg-maritime-slate/20 px-3 py-2">
-          <span className="text-xs text-text-muted">TER Score</span>
-          <span className="text-xs font-semibold text-text-primary">
-            {didOptions.length ? didScore.toFixed(2) : 'n/a'}
-          </span>
+
+        {/* Score Display */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-white/[0.06] border border-white/15 rounded px-3 py-2">
+            <div className="text-[9px] text-white/50 uppercase tracking-widest mb-1">Ter Score</div>
+            <div className="text-sm font-bold text-rlusd-glow tabular-nums">
+              {didOptions.length ? didScore.toFixed(3) : '—'}
+            </div>
+          </div>
+          <div className="bg-white/[0.06] border border-white/15 rounded px-3 py-2">
+            <div className="text-[9px] text-white/50 uppercase tracking-widest mb-1">Tx Count</div>
+            <div className="text-sm font-bold text-rlusd-glow tabular-nums">
+              {selectedDid ? memos.filter(entry => {
+                const decoded = decodeMemo(entry.memoHex);
+                return decoded?.shipowner_id === selectedDid;
+              }).length : 0}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto pr-1 space-y-4">
-        <div>
-          <p className="text-xs text-text-muted mb-2">Memo Tabs</p>
-          <div className="grid gap-2">
-            {memos.map(entry => {
-              const label = buildTabLabel(entry);
-              const isActive = entry.txHash === activeHash;
-              return (
-                <button
-                  key={entry.txHash}
-                  onClick={() => setSelectedHash(entry.txHash)}
-                  className={`w-full rounded-lg border px-3 py-2 text-left text-xs font-medium transition-all ${
-                    isActive
-                      ? 'border-rlusd-primary text-rlusd-glow bg-rlusd-primary/10'
-                      : 'border-white/10 text-text-muted hover:text-text-primary'
-                  }`}
-                >
-                  <span className="block truncate">{label}</span>
-                </button>
-              );
-            })}
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-hidden flex flex-col">
+        {/* Transactions List */}
+        <div className="flex-1 flex flex-col border-b border-white/10">
+          <div className="border-b border-white/10 px-4 py-3 bg-white/[0.04]">
+            <h3 className="text-[9px] text-white/50 uppercase tracking-widest font-bold">Transactions ({memos.length})</h3>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <div className="space-y-1 p-3">
+              {memos.map(entry => {
+                const label = buildTabLabel(entry);
+                const isActive = entry.txHash === activeHash;
+                return (
+                  <button
+                    key={entry.txHash}
+                    onClick={() => setSelectedHash(entry.txHash)}
+                    className={`w-full text-left px-2.5 py-2 rounded text-[10px] transition-all border ${
+                      isActive
+                        ? 'bg-rlusd-primary/20 border-rlusd-primary/50 text-rlusd-glow font-semibold'
+                        : 'bg-white/[0.05] border-white/10 text-white/70 hover:bg-white/[0.08] hover:border-white/20'
+                    }`}
+                  >
+                    <div className="truncate font-mono">{label}</div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
-        <div>
-          <p className="text-xs text-text-muted mb-1">Decoded Memo JSON</p>
-          {prettyJson ? (
-            <pre className="text-xs text-text-primary bg-maritime-slate/20 border border-white/5 rounded-lg p-3 whitespace-pre-wrap break-words max-h-52 overflow-auto">
-              {prettyJson}
-            </pre>
-          ) : (
-            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-200">
-              Memo decode or validation failed. Raw hex shown below.
+        {/* Details Panel */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Payload Section */}
+          <div className="flex-1 flex flex-col border-b border-white/10">
+            <div className="border-b border-white/10 px-4 py-3 bg-white/[0.04]">
+              <h3 className="text-[9px] text-white/50 uppercase tracking-widest font-bold">Payload JSON</h3>
             </div>
-          )}
-        </div>
+            {prettyJson ? (
+              <pre className="flex-1 overflow-auto px-4 py-3 text-[10px] text-green-400/80 leading-relaxed whitespace-pre-wrap break-words bg-white/[0.02]">
+                {prettyJson}
+              </pre>
+            ) : (
+              <div className="flex-1 flex items-center justify-center px-4">
+                <div className="text-center">
+                  <div className="text-red-400/60 text-[10px] mb-1">⚠ Decode Error</div>
+                  <div className="text-white/30 text-[9px]">Validation failed</div>
+                </div>
+              </div>
+            )}
+          </div>
 
-        <div>
-          <p className="text-xs text-text-muted mb-1">MemoData (hex)</p>
-          <pre className="text-xs text-text-primary bg-maritime-slate/20 border border-white/5 rounded-lg p-3 whitespace-pre-wrap break-words max-h-32 overflow-auto">
-            {activeMemo.memoHex}
-          </pre>
-        </div>
+          {/* Hex & Metadata Section */}
+          <div className="max-h-52 overflow-y-auto border-t border-white/10">
+            <div className="border-b border-white/10 px-4 py-3 bg-white/[0.04] sticky top-0">
+              <h3 className="text-[9px] text-white/50 uppercase tracking-widest font-bold">MemoData</h3>
+            </div>
+            <div className="p-4 space-y-3">
+              {/* Raw Hex */}
+              <div className="bg-white/[0.06] border border-white/15 rounded p-2.5">
+                <div className="text-[9px] text-white/50 uppercase tracking-wider mb-2 font-bold">Hex</div>
+                <pre className="text-[9px] text-white/60 overflow-x-auto max-h-20 break-all">
+                  {activeMemo.memoHex}
+                </pre>
+              </div>
 
-        <div className="grid gap-2 text-xs text-text-muted">
-          {activeMemo.memoTypeHex && (
-            <div>
-              <span>MemoType: </span>
-              <span className="font-mono text-text-primary break-words">{activeMemo.memoTypeHex}</span>
+              {/* Metadata Grid */}
+              <div className="space-y-1.5">
+                {activeMemo.memoTypeHex && (
+                  <div className="bg-white/[0.04] border border-white/10 rounded px-2.5 py-2">
+                    <div className="text-[9px] text-white/40 uppercase tracking-wider">Type</div>
+                    <div className="text-[10px] text-white/70 font-mono mt-1 break-all">{activeMemo.memoTypeHex}</div>
+                  </div>
+                )}
+                {activeMemo.memoFormatHex && (
+                  <div className="bg-white/[0.04] border border-white/10 rounded px-2.5 py-2">
+                    <div className="text-[9px] text-white/40 uppercase tracking-wider">Format</div>
+                    <div className="text-[10px] text-white/70 font-mono mt-1 break-all">{activeMemo.memoFormatHex}</div>
+                  </div>
+                )}
+                {activeMemo.ledgerStatus && (
+                  <div className="bg-white/[0.04] border border-white/10 rounded px-2.5 py-2">
+                    <div className="text-[9px] text-white/40 uppercase tracking-wider">Status</div>
+                    <div className="text-[10px] text-white/70 font-mono mt-1">{activeMemo.ledgerStatus}</div>
+                  </div>
+                )}
+                {!validation.ok && validation.error && (
+                  <div className="bg-red-500/10 border border-red-500/30 rounded px-2.5 py-2">
+                    <div className="text-[9px] text-red-400 font-bold">VALIDATION ERROR</div>
+                    <div className="text-[10px] text-red-300/70 mt-1">{validation.error}</div>
+                  </div>
+                )}
+              </div>
             </div>
-          )}
-          {activeMemo.memoFormatHex && (
-            <div>
-              <span>MemoFormat: </span>
-              <span className="font-mono text-text-primary break-words">{activeMemo.memoFormatHex}</span>
-            </div>
-          )}
-          {activeMemo.ledgerStatus && (
-            <div>
-              <span>Ledger Status: </span>
-              <span className="text-text-primary">{activeMemo.ledgerStatus}</span>
-            </div>
-          )}
-          {!validation.ok && validation.error && (
-            <div className="text-red-300">Validation error: {validation.error}</div>
-          )}
+          </div>
         </div>
       </div>
     </div>
@@ -669,13 +712,21 @@ export default function TerMemoPage() {
                 )}
               </div>
             </div>
-            <div className="sticky top-0">
-              <div className="card p-6 space-y-4">
-                <div>
-                  <p className="text-xs text-text-muted uppercase tracking-wider">Memo Visualizer</p>
-                  <p className="text-sm text-text-primary">Registry Memo History</p>
+            <div className="sticky top-0 h-[600px] flex flex-col">
+              <div className="border border-white/10 bg-gradient-to-b from-white/[0.08] to-white/[0.04] rounded-lg overflow-hidden flex flex-col h-full">
+                <div className="border-b border-white/10 px-4 py-3 bg-white/[0.06] flex items-center justify-between">
+                  <div className="flex-1">
+                    <p className="text-[9px] text-white/50 uppercase tracking-widest font-bold">Activity Monitor</p>
+                    <p className="text-[10px] text-white/40 font-mono mt-1">ledger.registry.ter</p>
+                  </div>
+                  <div className="flex items-center gap-2 ml-4">
+                    <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                    <span className="text-[9px] text-white/40">LIVE</span>
+                  </div>
                 </div>
-                <MemoVisualizer />
+                <div className="flex-1 overflow-y-auto">
+                  <MemoVisualizer />
+                </div>
               </div>
             </div>
           </div>
