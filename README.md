@@ -4,9 +4,9 @@
 
 ## **Links**
 
-* [Demo Website]([https://maritime-ui.vercel.app/](https://maritime-ui.vercel.app/))  
-* [Demo Video](...)  
-* [Slides](link after we upload it to the repo too)
+* [Demo Website](https://maritime-ui.vercel.app/)
+* [Demo Video](https://www.youtube.com/watch?v=RQuKmgV0P7Y)
+* [Slides](./content/LabRats67.pdf)
 
 ---
 
@@ -24,11 +24,11 @@ Enhanced risk visibility and streamlined cross-border transactions support faste
 
 ## [Business Process Flow](https://lucid.app/lucidchart/a581b430-64c4-41db-92aa-0999efcfddcd/edit?viewport_loc=-3014%2C-565%2C7595%2C3687%2Cm-5o7ONTd-nK&invitationId=inv_d698ec09-b9b8-459a-861b-621cb56e2f02)
 
-![Alt text](./images/business_process_flow.svg)
+![Alt text](./content/business_process_flow.svg)
 
 ## **Landing Page Image**
 
-![Alt text](./images/landing_page.png)
+![Alt text](./content/landing_page.png)
 
 ## **Voyage Dashboard**
 
