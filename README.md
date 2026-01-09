@@ -22,7 +22,7 @@ By facilitating and scanning on-chain settlements, we establish a Transaction Ex
 
 Enhanced risk visibility and streamlined cross-border transactions support faster funding for ship owners and transparent, flexible yield opportunities for investors. Together, this creates a scalable infrastructure purpose-built for short-term maritime financing.
 
-## [Business Process Flow](https://lucid.app/lucidchart/a581b430-64c4-41db-92aa-0999efcfddcd/edit?viewport_loc=-3014%2C-565%2C7595%2C3687%2Cm-5o7ONTd-nK&invitationId=inv_d698ec09-b9b8-459a-861b-621cb56e2f02)
+## [End-to-End Workflow Diagram](https://lucid.app/lucidchart/a581b430-64c4-41db-92aa-0999efcfddcd/edit?viewport_loc=-3014%2C-565%2C7595%2C3687%2Cm-5o7ONTd-nK&invitationId=inv_d698ec09-b9b8-459a-861b-621cb56e2f02)
 
 ![Alt text](./images/business_process_flow.svg)
 
