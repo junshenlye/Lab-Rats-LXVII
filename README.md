@@ -22,7 +22,16 @@ By facilitating and scanning on-chain settlements, we establish a Transaction Ex
 
 Enhanced risk visibility and streamlined cross-border transactions support faster funding for ship owners and transparent, flexible yield opportunities for investors. Together, this creates a scalable infrastructure purpose-built for short-term maritime financing.
 
-## [Business Process Flow](https://lucid.app/lucidchart/a581b430-64c4-41db-92aa-0999efcfddcd/edit?viewport_loc=-3014%2C-565%2C7595%2C3687%2Cm-5o7ONTd-nK&invitationId=inv_d698ec09-b9b8-459a-861b-621cb56e2f02)
+## **Our Solution**
+We’ve built a three-layer system to bring efficiency, reliability, and finance innovation to shipowners on the XRPL. The first layer is our transactional layer, where we manage invoices for each voyage. This layer is kept off-chain to maximize privacy, and it allows shipowners to generate unique payment links that their clients can use to settle invoices quickly and securely.
+
+The second layer adds attestation and on-chain scoring. Here, we track voyage milestones using data such as AIS ship tracking, bills of lading, and other documentation. This lets us verify that each voyage is progressing as expected, and we use that data to calculate a Transaction Execution Reliability score. This TER score is then logged on-chain in a public registry, providing a transparent and verifiable measure of the shipowner’s operational reliability and payment behavior.
+
+Finally, the third layer enables financing. Investors can inject liquidity into voyages based on the shipowner’s TER score. High TER scores signal strong operational performance and cash flow reliability, which allows shipowners to access better loan terms than conventional financing options. Loans are facilitated through escrow logic with built-in safeguards to limit default risk.
+
+In short, our system enables faster and easier settlements, protects sensitive data, and rewards operational excellence with positive financing opportunities — creating a win-win for both shipowners and investors
+
+## [End-to-End Workflow Diagram](https://lucid.app/lucidchart/a581b430-64c4-41db-92aa-0999efcfddcd/edit?viewport_loc=-3014%2C-565%2C7595%2C3687%2Cm-5o7ONTd-nK&invitationId=inv_d698ec09-b9b8-459a-861b-621cb56e2f02)
 
 ![Alt text](./content/business_process_flow.svg)
 
